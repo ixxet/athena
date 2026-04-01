@@ -9,12 +9,13 @@ import (
 )
 
 type MockConfig struct {
-	FacilityID string
-	ZoneID     string
-	Entries    int
-	Exits      int
-	BaseTime   time.Time
-	Events     []domain.PresenceEvent
+	FacilityID          string
+	ZoneID              string
+	Entries             int
+	Exits               int
+	BaseTime            time.Time
+	IdentifiedTagHashes []string
+	Events              []domain.PresenceEvent
 }
 
 type MockAdapter struct {
@@ -58,13 +59,19 @@ func buildMockEvents(cfg MockConfig) []domain.PresenceEvent {
 	start = start.Add(-15 * time.Minute)
 
 	for i := 0; i < cfg.Entries; i++ {
+		externalIdentityHash := ""
+		if i < len(cfg.IdentifiedTagHashes) {
+			externalIdentityHash = cfg.IdentifiedTagHashes[i]
+		}
+
 		events = append(events, domain.PresenceEvent{
-			ID:         fmt.Sprintf("mock-in-%03d", i+1),
-			FacilityID: cfg.FacilityID,
-			ZoneID:     cfg.ZoneID,
-			Direction:  domain.DirectionIn,
-			Source:     domain.SourceMock,
-			RecordedAt: start.Add(time.Duration(i) * time.Minute),
+			ID:                   fmt.Sprintf("mock-in-%03d", i+1),
+			FacilityID:           cfg.FacilityID,
+			ZoneID:               cfg.ZoneID,
+			ExternalIdentityHash: externalIdentityHash,
+			Direction:            domain.DirectionIn,
+			Source:               domain.SourceMock,
+			RecordedAt:           start.Add(time.Duration(i) * time.Minute),
 			Metadata: map[string]string{
 				"seed": "mock",
 			},
