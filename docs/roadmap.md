@@ -25,3 +25,8 @@ Turn the platform from architecture into reality by shipping one clean end-to-en
 - the repo has one stable read API surface
 - the CLI confirms the same data as the API
 - the service exposes metrics that Prometheus can scrape later
+
+## Tracer Ownership
+
+- `Tracer 1`: mock presence -> API -> CLI -> metric
+- `Tracer 2`: presence event emission or integration needed by APOLLO visit recording

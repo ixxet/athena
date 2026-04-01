@@ -2,7 +2,7 @@
 
 ATHENA is the first executable service in ASHTON. It owns facility presence, ingress source handling, occupancy visibility, capacity prediction, and the first real operational data surface that the rest of the platform will depend on.
 
-This repo is intentionally docs-first for now. The detailed brief lives in [ashton-platform/planning/repo-briefs/athena.md](https://github.com/ixxet/ashton-platform/blob/main/planning/repo-briefs/athena.md).
+This repo is now past pure docs-first bootstrap. The detailed brief lives in [ashton-platform/planning/repo-briefs/athena.md](https://github.com/ixxet/ashton-platform/blob/main/planning/repo-briefs/athena.md).
 
 ## Role In The Platform
 
@@ -28,4 +28,17 @@ Redis is deferred from the first tracer bullet, but it remains a planned utility
 
 ## Current State
 
-Docs-first stub only. No Go scaffold has been created yet on purpose.
+Bootstrap slice complete:
+
+- `go.mod` exists
+- mock presence adapter exists
+- one CLI count command exists
+- one HTTP read endpoint exists
+- one Prometheus metric exists
+- container build and GitHub Actions image publishing exist
+
+See:
+
+- `docs/roadmap.md`
+- `docs/runbooks/mock-slice.md`
+- `docs/growing-pains.md`
