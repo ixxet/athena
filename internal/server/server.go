@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,13 +20,20 @@ type countResponse struct {
 	ObservedAt   string `json:"observed_at"`
 }
 
-func NewHandler(service *presence.Service, collector *metrics.Metrics) http.Handler {
+type healthResponse struct {
+	Service string `json:"service"`
+	Status  string `json:"status"`
+	Adapter string `json:"adapter"`
+}
+
+func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapterName string) http.Handler {
 	router := chi.NewRouter()
 
 	router.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"service": "athena",
-			"status":  "ok",
+		writeJSON(w, http.StatusOK, healthResponse{
+			Service: "athena",
+			Status:  "ok",
+			Adapter: adapterName,
 		})
 	})
 
@@ -35,7 +43,7 @@ func NewHandler(service *presence.Service, collector *metrics.Metrics) http.Hand
 			ZoneID:     r.URL.Query().Get("zone"),
 		}
 
-		snapshot, err := service.CurrentOccupancy(r.Context(), filter)
+		snapshot, err := readPath.CurrentOccupancy(r.Context(), filter)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
 				"error": err.Error(),
@@ -43,13 +51,11 @@ func NewHandler(service *presence.Service, collector *metrics.Metrics) http.Hand
 			return
 		}
 
-		collector.SetCurrentOccupancy(snapshot.CurrentCount)
-
 		writeJSON(w, http.StatusOK, countResponse{
 			FacilityID:   snapshot.FacilityID,
 			ZoneID:       snapshot.ZoneID,
 			CurrentCount: snapshot.CurrentCount,
-			ObservedAt:   snapshot.ObservedAt.Format(http.TimeFormat),
+			ObservedAt:   snapshot.ObservedAt.Format(time.RFC3339),
 		})
 	})
 

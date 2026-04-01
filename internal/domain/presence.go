@@ -31,7 +31,15 @@ type OccupancyFilter struct {
 	ZoneID     string
 }
 
-type OccupancySnapshot struct {
+type PresenceState struct {
+	FacilityID string    `json:"facility_id"`
+	ZoneID     string    `json:"zone_id,omitempty"`
+	Arrivals   int       `json:"arrivals"`
+	Departures int       `json:"departures"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+type OccupancyState struct {
 	FacilityID   string    `json:"facility_id"`
 	ZoneID       string    `json:"zone_id,omitempty"`
 	CurrentCount int       `json:"current_count"`
@@ -46,5 +54,23 @@ func (e PresenceEvent) Delta() int {
 		return -1
 	default:
 		return 0
+	}
+}
+
+func (s PresenceState) CurrentCount() int {
+	currentCount := s.Arrivals - s.Departures
+	if currentCount < 0 {
+		return 0
+	}
+
+	return currentCount
+}
+
+func (s PresenceState) Occupancy() OccupancyState {
+	return OccupancyState{
+		FacilityID:   s.FacilityID,
+		ZoneID:       s.ZoneID,
+		CurrentCount: s.CurrentCount(),
+		ObservedAt:   s.ObservedAt,
 	}
 }

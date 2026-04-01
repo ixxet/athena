@@ -44,23 +44,18 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the ATHENA HTTP server.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.Load()
-
-			svc, err := buildService(cfg)
+			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 
-			collector := metrics.New()
-			snapshot, err := svc.CurrentOccupancy(cmd.Context(), domain.OccupancyFilter{
-				FacilityID: cfg.MockFacilityID,
-				ZoneID:     cfg.MockZoneID,
-			})
-			if err == nil {
-				collector.SetCurrentOccupancy(snapshot.CurrentCount)
+			readPath, adapterName, err := buildReadPath(cfg)
+			if err != nil {
+				return err
 			}
 
-			handler := server.NewHandler(svc, collector)
+			collector := metrics.New(readPath)
+			handler := server.NewHandler(readPath, collector, adapterName)
 			httpServer := &http.Server{
 				Addr:    cfg.HTTPAddr,
 				Handler: handler,
@@ -91,9 +86,12 @@ func newPresenceCmd() *cobra.Command {
 		Use:   "count",
 		Short: "Show the current occupancy count.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
 
-			svc, err := buildService(cfg)
+			readPath, _, err := buildReadPath(cfg)
 			if err != nil {
 				return err
 			}
@@ -102,14 +100,8 @@ func newPresenceCmd() *cobra.Command {
 				FacilityID: facilityID,
 				ZoneID:     zoneID,
 			}
-			if filter.FacilityID == "" {
-				filter.FacilityID = cfg.MockFacilityID
-			}
-			if filter.ZoneID == "" {
-				filter.ZoneID = cfg.MockZoneID
-			}
 
-			snapshot, err := svc.CurrentOccupancy(cmd.Context(), filter)
+			snapshot, err := readPath.CurrentOccupancy(cmd.Context(), filter)
 			if err != nil {
 				return err
 			}
@@ -144,7 +136,7 @@ func newPresenceCmd() *cobra.Command {
 	return presenceCmd
 }
 
-func buildService(cfg config.Config) (*presence.Service, error) {
+func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
 	switch cfg.Adapter {
 	case "mock":
 		mockAdapter := adapter.NewMockAdapter(adapter.MockConfig{
@@ -153,8 +145,14 @@ func buildService(cfg config.Config) (*presence.Service, error) {
 			Entries:    cfg.MockEntries,
 			Exits:      cfg.MockExits,
 		})
-		return presence.NewService(mockAdapter), nil
+		service := presence.NewService(mockAdapter)
+		readPath := presence.NewReadPath(service, domain.OccupancyFilter{
+			FacilityID: cfg.MockFacilityID,
+			ZoneID:     cfg.MockZoneID,
+		})
+
+		return readPath, mockAdapter.Name(), nil
 	default:
-		return nil, fmt.Errorf("unsupported adapter %q", cfg.Adapter)
+		return nil, "", fmt.Errorf("unsupported adapter %q", cfg.Adapter)
 	}
 }

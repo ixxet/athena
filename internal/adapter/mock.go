@@ -13,6 +13,8 @@ type MockConfig struct {
 	ZoneID     string
 	Entries    int
 	Exits      int
+	BaseTime   time.Time
+	Events     []domain.PresenceEvent
 }
 
 type MockAdapter struct {
@@ -37,13 +39,23 @@ func (m *MockAdapter) ListEvents(_ context.Context) ([]domain.PresenceEvent, err
 }
 
 func buildMockEvents(cfg MockConfig) []domain.PresenceEvent {
-	total := cfg.Entries + cfg.Exits
-	if total == 0 {
-		total = 1
+	if len(cfg.Events) > 0 {
+		out := make([]domain.PresenceEvent, len(cfg.Events))
+		copy(out, cfg.Events)
+		return out
 	}
 
+	total := cfg.Entries + cfg.Exits
 	events := make([]domain.PresenceEvent, 0, total)
-	start := time.Now().UTC().Add(-15 * time.Minute)
+	if total == 0 {
+		return events
+	}
+
+	start := cfg.BaseTime.UTC()
+	if start.IsZero() {
+		start = time.Now().UTC()
+	}
+	start = start.Add(-15 * time.Minute)
 
 	for i := 0; i < cfg.Entries; i++ {
 		events = append(events, domain.PresenceEvent{

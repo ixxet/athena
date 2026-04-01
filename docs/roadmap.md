@@ -26,6 +26,14 @@ Turn the platform from architecture into reality by shipping one clean end-to-en
 - the CLI confirms the same data as the API
 - the service exposes metrics that Prometheus can scrape later
 
+## Current State
+
+Tracer 1 now has a stable narrow read slice:
+
+- occupancy math is unit-tested across clamp, empty, unknown-facility, and multi-facility cases
+- CLI, HTTP, and Prometheus all read through the same default-filtered occupancy path
+- config validation and deterministic mock fixtures are in place before widening toward real adapters
+
 ## Tracer Ownership
 
 - `Tracer 1`: mock presence -> API -> CLI -> metric

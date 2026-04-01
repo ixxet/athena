@@ -8,24 +8,60 @@ import (
 	"github.com/ixxet/athena/internal/domain"
 )
 
+type Clock func() time.Time
+
 type Service struct {
 	adapter adapter.PresenceAdapter
+	now     Clock
 }
 
-func NewService(adapter adapter.PresenceAdapter) *Service {
-	return &Service{adapter: adapter}
+type Option func(*Service)
+
+func WithClock(now Clock) Option {
+	return func(s *Service) {
+		if now != nil {
+			s.now = now
+		}
+	}
 }
 
-func (s *Service) CurrentOccupancy(ctx context.Context, filter domain.OccupancyFilter) (domain.OccupancySnapshot, error) {
-	events, err := s.adapter.ListEvents(ctx)
-	if err != nil {
-		return domain.OccupancySnapshot{}, err
+func NewService(adapter adapter.PresenceAdapter, opts ...Option) *Service {
+	service := &Service{
+		adapter: adapter,
+		now: func() time.Time {
+			return time.Now().UTC()
+		},
 	}
 
-	snapshot := domain.OccupancySnapshot{
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	return service
+}
+
+func (s *Service) CurrentPresenceState(ctx context.Context, filter domain.OccupancyFilter) (domain.PresenceState, error) {
+	events, err := s.adapter.ListEvents(ctx)
+	if err != nil {
+		return domain.PresenceState{}, err
+	}
+
+	return BuildPresenceState(events, filter, s.now()), nil
+}
+
+func (s *Service) CurrentOccupancy(ctx context.Context, filter domain.OccupancyFilter) (domain.OccupancyState, error) {
+	presenceState, err := s.CurrentPresenceState(ctx, filter)
+	if err != nil {
+		return domain.OccupancyState{}, err
+	}
+
+	return presenceState.Occupancy(), nil
+}
+
+func BuildPresenceState(events []domain.PresenceEvent, filter domain.OccupancyFilter, observedAt time.Time) domain.PresenceState {
+	state := domain.PresenceState{
 		FacilityID: filter.FacilityID,
 		ZoneID:     filter.ZoneID,
-		ObservedAt: time.Now().UTC(),
 	}
 
 	for _, event := range events {
@@ -36,22 +72,27 @@ func (s *Service) CurrentOccupancy(ctx context.Context, filter domain.OccupancyF
 			continue
 		}
 
-		if snapshot.FacilityID == "" {
-			snapshot.FacilityID = event.FacilityID
+		if state.FacilityID == "" {
+			state.FacilityID = event.FacilityID
 		}
-		if snapshot.ZoneID == "" {
-			snapshot.ZoneID = event.ZoneID
+		if state.ZoneID == "" {
+			state.ZoneID = event.ZoneID
 		}
-		if event.RecordedAt.After(snapshot.ObservedAt) {
-			snapshot.ObservedAt = event.RecordedAt
+		if event.RecordedAt.After(state.ObservedAt) {
+			state.ObservedAt = event.RecordedAt
 		}
 
-		snapshot.CurrentCount += event.Delta()
+		switch event.Direction {
+		case domain.DirectionIn:
+			state.Arrivals++
+		case domain.DirectionOut:
+			state.Departures++
+		}
 	}
 
-	if snapshot.CurrentCount < 0 {
-		snapshot.CurrentCount = 0
+	if state.ObservedAt.IsZero() {
+		state.ObservedAt = observedAt.UTC()
 	}
 
-	return snapshot, nil
+	return state
 }

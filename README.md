@@ -28,14 +28,13 @@ Redis is deferred from the first tracer bullet, but it remains a planned utility
 
 ## Current State
 
-Bootstrap slice complete:
+Tracer 1 read-path hardening is in place:
 
-- `go.mod` exists
-- mock presence adapter exists
-- one CLI count command exists
-- one HTTP read endpoint exists
-- one Prometheus metric exists
-- container build and GitHub Actions image publishing exist
+- the mock adapter supports deterministic fixtures for tests
+- one canonical occupancy read path is shared by CLI, HTTP, and Prometheus
+- unknown facilities return a deterministic zero count instead of panicking or drifting negative
+- invalid adapter config fails fast at startup
+- container builds now follow the target architecture so local arm64 smoke and published multi-arch images can converge
 
 See:
 
