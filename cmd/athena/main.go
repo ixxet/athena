@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
 
 	"github.com/ixxet/athena/internal/adapter"
@@ -15,8 +16,31 @@ import (
 	"github.com/ixxet/athena/internal/domain"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
+	"github.com/ixxet/athena/internal/publish"
 	"github.com/ixxet/athena/internal/server"
 )
+
+type app struct {
+	adapter     adapter.PresenceAdapter
+	readPath    *presence.ReadPath
+	adapterName string
+}
+
+var newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
+	if cfg.NATSURL == "" {
+		return nil, nil, fmt.Errorf("ATHENA_NATS_URL is required")
+	}
+
+	conn, err := nats.Connect(cfg.NATSURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return publish.NewNATSPublisher(conn), func() error {
+		conn.Close()
+		return nil
+	}, nil
+}
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -49,13 +73,36 @@ func newServeCmd() *cobra.Command {
 				return err
 			}
 
-			readPath, adapterName, err := buildReadPath(cfg)
+			application, err := buildApp(cfg)
 			if err != nil {
 				return err
 			}
 
-			collector := metrics.New(readPath)
-			handler := server.NewHandler(readPath, collector, adapterName)
+			collector := metrics.New(application.readPath)
+			handler := server.NewHandler(application.readPath, collector, application.adapterName)
+			if cfg.NATSURL != "" {
+				publisher, closePublisher, err := newPublisherHandle(cfg)
+				if err != nil {
+					return err
+				}
+				defer closePublisher()
+
+				worker := publish.NewWorker(
+					publish.NewService(application.adapter, publisher),
+					cfg.IdentifiedPublishInterval,
+				)
+				go func() {
+					if err := worker.Run(cmd.Context()); err != nil {
+						slog.Error("identified arrival publisher stopped", "error", err)
+					}
+				}()
+				slog.Info(
+					"identified arrival publisher enabled",
+					"subject", publish.SubjectIdentifiedPresenceArrived,
+					"interval", cfg.IdentifiedPublishInterval.String(),
+				)
+			}
+
 			httpServer := &http.Server{
 				Addr:    cfg.HTTPAddr,
 				Handler: handler,
@@ -133,17 +180,77 @@ func newPresenceCmd() *cobra.Command {
 
 	presenceCmd.AddCommand(countCmd)
 
+	var publishFormat string
+	publishCmd := &cobra.Command{
+		Use:   "publish-identified",
+		Short: "Publish identified arrival events.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+
+			application, err := buildApp(cfg)
+			if err != nil {
+				return err
+			}
+
+			publisher, closePublisher, err := newPublisherHandle(cfg)
+			if err != nil {
+				return err
+			}
+			defer closePublisher()
+
+			published, err := publish.NewService(application.adapter, publisher).Publish(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			switch publishFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(map[string]any{
+					"subject":         publish.SubjectIdentifiedPresenceArrived,
+					"published_count": published,
+				})
+			case "text":
+				_, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"subject=%s published_count=%d\n",
+					publish.SubjectIdentifiedPresenceArrived,
+					published,
+				)
+				return err
+			default:
+				return fmt.Errorf("unsupported format %q", publishFormat)
+			}
+		},
+	}
+	publishCmd.Flags().StringVar(&publishFormat, "format", "text", "output format: text or json")
+	presenceCmd.AddCommand(publishCmd)
+
 	return presenceCmd
 }
 
 func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
+	application, err := buildApp(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return application.readPath, application.adapterName, nil
+}
+
+func buildApp(cfg config.Config) (*app, error) {
 	switch cfg.Adapter {
 	case "mock":
 		mockAdapter := adapter.NewMockAdapter(adapter.MockConfig{
-			FacilityID: cfg.MockFacilityID,
-			ZoneID:     cfg.MockZoneID,
-			Entries:    cfg.MockEntries,
-			Exits:      cfg.MockExits,
+			FacilityID:          cfg.MockFacilityID,
+			ZoneID:              cfg.MockZoneID,
+			Entries:             cfg.MockEntries,
+			Exits:               cfg.MockExits,
+			IdentifiedTagHashes: cfg.MockIdentifiedTagHashes,
 		})
 		service := presence.NewService(mockAdapter)
 		readPath := presence.NewReadPath(service, domain.OccupancyFilter{
@@ -151,8 +258,12 @@ func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
 			ZoneID:     cfg.MockZoneID,
 		})
 
-		return readPath, mockAdapter.Name(), nil
+		return &app{
+			adapter:     mockAdapter,
+			readPath:    readPath,
+			adapterName: mockAdapter.Name(),
+		}, nil
 	default:
-		return nil, "", fmt.Errorf("unsupported adapter %q", cfg.Adapter)
+		return nil, fmt.Errorf("unsupported adapter %q", cfg.Adapter)
 	}
 }
