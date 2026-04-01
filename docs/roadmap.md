@@ -33,8 +33,9 @@ Tracer 1 now has a stable narrow read slice:
 - occupancy math is unit-tested across clamp, empty, unknown-facility, and multi-facility cases
 - CLI, HTTP, and Prometheus all read through the same default-filtered occupancy path
 - config validation and deterministic mock fixtures are in place before widening toward real adapters
+- Tracer 2 now publishes only identified arrival events and keeps anonymous arrivals and departures out of the APOLLO visit path
 
 ## Tracer Ownership
 
 - `Tracer 1`: mock presence -> API -> CLI -> metric
-- `Tracer 2`: presence event emission or integration needed by APOLLO visit recording
+- `Tracer 2`: identified ATHENA arrival event -> APOLLO visit recording

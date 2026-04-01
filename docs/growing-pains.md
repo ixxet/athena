@@ -28,3 +28,8 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   made tests and read outputs less stable than they needed to be. The fix was to
   allow fixed base times and explicit event fixtures so the narrow slice is
   deterministic under test.
+
+- The first Tracer 2 publisher draft would have republished the same static mock
+  arrivals on every `serve` poll. The fix was to keep a process-local published
+  id cache in the worker and leave cross-restart replay handling to APOLLO
+  idempotency.

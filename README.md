@@ -35,6 +35,8 @@ Tracer 1 read-path hardening is in place:
 - unknown facilities return a deterministic zero count instead of panicking or drifting negative
 - invalid adapter config fails fast at startup
 - container builds now follow the target architecture so local arm64 smoke and published multi-arch images can converge
+- Tracer 2 adds one identified-arrival publish path reused by `athena presence publish-identified` and an optional `serve` worker without changing the occupancy read path
+- this repo is ready for a `v0.2.0` tracer-close tag
 
 See:
 
