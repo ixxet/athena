@@ -1,6 +1,6 @@
 # athena
 
-ATHENA is the first executable service in ASHTON. It owns facility presence, check-in source handling, occupancy visibility, capacity prediction, and the first real operational data surface that the rest of the platform will depend on.
+ATHENA is the first executable service in ASHTON. It owns facility presence, ingress source handling, occupancy visibility, capacity prediction, and the first real operational data surface that the rest of the platform will depend on.
 
 This repo is intentionally docs-first for now. The detailed brief lives in [ashton-platform/planning/repo-briefs/athena.md](https://github.com/ixxet/ashton-platform/blob/main/planning/repo-briefs/athena.md).
 
@@ -21,6 +21,10 @@ Ship the mock physical-truth tracer bullet:
 - one CLI command
 - one HTTP read endpoint
 - one Prometheus metric
+
+## Planned Redis Use
+
+Redis is deferred from the first tracer bullet, but it remains a planned utility for fast occupancy counters and short-lived aggregate caching once ATHENA has a real event flow.
 
 ## Current State
 
