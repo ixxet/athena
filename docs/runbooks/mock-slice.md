@@ -18,6 +18,10 @@ Use this runbook for the first narrow ATHENA slice and future mock-backed read-p
 - container smoke test for `/api/v1/health`, `/api/v1/presence/count`, and `/metrics`
 - manifest render via `kustomize build` or `kubectl kustomize`
 
+If the operator machine is arm64 but the published image is amd64-only, treat
+that as a release-path finding and document it explicitly instead of pretending
+the local container smoke check passed.
+
 ## Do Not Widen Until
 
 - real count logic is stable
