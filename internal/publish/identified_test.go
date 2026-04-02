@@ -2,11 +2,12 @@ package publish
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	protoevents "github.com/ixxet/ashton-proto/events"
 	"github.com/ixxet/athena/internal/domain"
 )
 
@@ -68,23 +69,11 @@ func TestBuildBatchFiltersToIdentifiedArrivals(t *testing.T) {
 	if len(batch) != 1 {
 		t.Fatalf("len(batch) = %d, want 1", len(batch))
 	}
-	if batch[0].Subject != SubjectIdentifiedPresenceArrived {
-		t.Fatalf("batch[0].Subject = %q, want %q", batch[0].Subject, SubjectIdentifiedPresenceArrived)
+	if batch[0].Subject != protoevents.SubjectIdentifiedPresenceArrived {
+		t.Fatalf("batch[0].Subject = %q, want %q", batch[0].Subject, protoevents.SubjectIdentifiedPresenceArrived)
 	}
-
-	var message envelope
-	if err := json.Unmarshal(batch[0].Payload, &message); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-
-	if message.Source != "athena" {
-		t.Fatalf("message.Source = %q, want athena", message.Source)
-	}
-	if message.Data.ExternalIdentityHash != "tag_tracer2_001" {
-		t.Fatalf("message.Data.ExternalIdentityHash = %q, want tag_tracer2_001", message.Data.ExternalIdentityHash)
-	}
-	if message.Data.RecordedAt != recordedAt.Format(time.RFC3339Nano) {
-		t.Fatalf("message.Data.RecordedAt = %q, want %q", message.Data.RecordedAt, recordedAt.Format(time.RFC3339Nano))
+	if string(batch[0].Payload) != string(protoevents.ValidIdentifiedPresenceArrivedFixture()) {
+		t.Fatalf("batch[0].Payload = %s, want fixture %s", batch[0].Payload, protoevents.ValidIdentifiedPresenceArrivedFixture())
 	}
 }
 
@@ -107,7 +96,7 @@ func TestPublishBatchReturnsBrokerUnavailableError(t *testing.T) {
 	publisher := &stubPublisher{err: errors.New("broker unavailable")}
 	batch := []Message{{
 		ID:      "mock-in-001",
-		Subject: SubjectIdentifiedPresenceArrived,
+		Subject: protoevents.SubjectIdentifiedPresenceArrived,
 		Payload: []byte(`{"id":"mock-in-001"}`),
 	}}
 
@@ -115,7 +104,26 @@ func TestPublishBatchReturnsBrokerUnavailableError(t *testing.T) {
 	if err == nil {
 		t.Fatal("PublishBatch() error = nil, want broker unavailable error")
 	}
+	if !strings.Contains(err.Error(), "publish identified arrival") {
+		t.Fatalf("PublishBatch() error = %v, want publish context", err)
+	}
 	if published != 0 {
 		t.Fatalf("PublishBatch() published = %d, want 0", published)
+	}
+}
+
+func TestBuildBatchRejectsUnsupportedSource(t *testing.T) {
+	_, err := BuildBatch([]domain.PresenceEvent{
+		{
+			ID:                   "mock-in-001",
+			FacilityID:           "ashtonbee",
+			ExternalIdentityHash: "tag_tracer2_001",
+			Direction:            domain.DirectionIn,
+			Source:               domain.PresenceSource("infrared"),
+			RecordedAt:           time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC),
+		},
+	})
+	if err == nil {
+		t.Fatal("BuildBatch() error = nil, want unsupported source error")
 	}
 }
