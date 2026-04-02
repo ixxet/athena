@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	protoevents "github.com/ixxet/ashton-proto/events"
 	athenav1 "github.com/ixxet/ashton-proto/gen/go/ashton/athena/v1"
@@ -18,6 +19,8 @@ import (
 type Publisher interface {
 	Publish(ctx context.Context, subject string, payload []byte) error
 }
+
+const publishFlushTimeout = 5 * time.Second
 
 type Message struct {
 	ID      string
@@ -50,7 +53,10 @@ func (p *NATSPublisher) Publish(ctx context.Context, subject string, payload []b
 		return err
 	}
 
-	return p.conn.FlushWithContext(ctx)
+	flushCtx, cancel := flushContext(ctx, publishFlushTimeout)
+	defer cancel()
+
+	return p.conn.FlushWithContext(flushCtx)
 }
 
 func (s *Service) BuildBatch(ctx context.Context) ([]Message, error) {
@@ -180,4 +186,12 @@ func toProtoPresenceSource(source domain.PresenceSource) (athenav1.PresenceSourc
 	default:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_UNSPECIFIED, fmt.Errorf("unsupported presence source %q", source)
 	}
+}
+
+func flushContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := parent.Deadline(); hasDeadline {
+		return context.WithCancel(parent)
+	}
+
+	return context.WithTimeout(parent, timeout)
 }
