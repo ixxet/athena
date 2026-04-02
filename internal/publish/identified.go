@@ -77,7 +77,7 @@ func BuildBatch(events []domain.PresenceEvent) ([]Message, error) {
 		message, include, err := buildMessage(event)
 		if err != nil {
 			slog.Warn("identified arrival rejected", "event_id", event.ID, "error", err)
-			return nil, err
+			return nil, fmt.Errorf("build identified arrival %q: %w", event.ID, err)
 		}
 		if !include {
 			continue
@@ -94,7 +94,7 @@ func PublishBatch(ctx context.Context, publisher Publisher, batch []Message) (in
 	for _, message := range batch {
 		if err := publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
 			slog.Error("identified arrival publish failed", "event_id", message.ID, "subject", message.Subject, "error", err)
-			return published, err
+			return published, fmt.Errorf("publish identified arrival %q on %s: %w", message.ID, message.Subject, err)
 		}
 		slog.Info("identified arrival published", "event_id", message.ID, "subject", message.Subject)
 		published++
@@ -105,10 +105,12 @@ func PublishBatch(ctx context.Context, publisher Publisher, batch []Message) (in
 
 func buildMessage(event domain.PresenceEvent) (Message, bool, error) {
 	if event.Direction != domain.DirectionIn {
+		slog.Debug("identified arrival skipped", "event_id", event.ID, "reason", "non_arrival")
 		return Message{}, false, nil
 	}
 
 	if strings.TrimSpace(event.ExternalIdentityHash) == "" {
+		slog.Debug("identified arrival skipped", "event_id", event.ID, "reason", "anonymous")
 		return Message{}, false, nil
 	}
 
