@@ -33,3 +33,23 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   arrivals on every `serve` poll. The fix was to keep a process-local published
   id cache in the worker and leave cross-restart replay handling to APOLLO
   idempotency.
+
+## 2026-04-02
+
+- Symptom: the identified-arrival publisher still owned a private JSON contract
+  even after `ashton-proto` defined the shared event.
+  Cause: the first Tracer 2 pass stopped at a working wire shape instead of
+  finishing the runtime contract-sharing loop.
+  Fix: switch the publisher onto the shared `ashton-proto/events` helper and
+  map ATHENA source values explicitly into the shared enum.
+  Rule: ATHENA owns physical truth, not a second copy of the shared event wire
+  contract.
+
+- Symptom: `athena presence publish-identified` returned an error against real
+  NATS even though APOLLO still recorded the visit.
+  Cause: `FlushWithContext` was called with Cobra's root context, which had no
+  deadline, so publish reporting failed after the message had already been sent.
+  Fix: add a bounded flush timeout when the caller context has no deadline and
+  cover that branch with a regression test.
+  Rule: every broker flush path needs an explicit deadline, and one-shot publish
+  commands should be smoke-tested against a real broker before a tracer closes.

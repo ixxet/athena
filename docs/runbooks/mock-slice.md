@@ -16,7 +16,12 @@ Use this runbook for the first narrow ATHENA slice and future mock-backed read-p
 
 - `go test ./...`
 - container smoke test for `/api/v1/health`, `/api/v1/presence/count`, and `/metrics`
-- when identified publishing is enabled, cover the one-shot publish command and worker dedupe path before widening deploy work
+- when identified publishing is enabled, the publisher must emit bytes from the
+  shared `ashton-proto` runtime contract
+- when identified publishing is enabled, cover the one-shot publish command and
+  worker dedupe path before widening deploy work
+- before closing the tracer, smoke the publish path against a real NATS target
+  so flush-timeout and reporting bugs are not hidden behind stub publishers
 - manifest render via `kustomize build` or `kubectl kustomize`
 
 If the operator machine is arm64 but the published image is amd64-only, treat
