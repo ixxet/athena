@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
 
+	protoevents "github.com/ixxet/ashton-proto/events"
 	"github.com/ixxet/athena/internal/adapter"
 	"github.com/ixxet/athena/internal/config"
 	"github.com/ixxet/athena/internal/domain"
@@ -98,7 +99,7 @@ func newServeCmd() *cobra.Command {
 				}()
 				slog.Info(
 					"identified arrival publisher enabled",
-					"subject", publish.SubjectIdentifiedPresenceArrived,
+					"subject", protoevents.SubjectIdentifiedPresenceArrived,
 					"interval", cfg.IdentifiedPublishInterval.String(),
 				)
 			}
@@ -211,14 +212,14 @@ func newPresenceCmd() *cobra.Command {
 				encoder := json.NewEncoder(cmd.OutOrStdout())
 				encoder.SetIndent("", "  ")
 				return encoder.Encode(map[string]any{
-					"subject":         publish.SubjectIdentifiedPresenceArrived,
+					"subject":         protoevents.SubjectIdentifiedPresenceArrived,
 					"published_count": published,
 				})
 			case "text":
 				_, err := fmt.Fprintf(
 					cmd.OutOrStdout(),
 					"subject=%s published_count=%d\n",
-					publish.SubjectIdentifiedPresenceArrived,
+					protoevents.SubjectIdentifiedPresenceArrived,
 					published,
 				)
 				return err
