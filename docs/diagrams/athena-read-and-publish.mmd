@@ -1,0 +1,25 @@
+flowchart LR
+  subgraph inputs["Ingress sources"]
+    mock["mock adapter<br/>active today"]
+    future["rfid / database / csv / tof<br/>planned later"]
+  end
+
+  adapter["adapter layer"]
+  read["presence read path<br/>canonical occupancy logic"]
+  cli["CLI<br/>athena presence count"]
+  api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count"]
+  metrics["Prometheus<br/>athena_current_occupancy"]
+  publish["identified-arrival publisher"]
+  helper["ashton-proto<br/>runtime helper"]
+  nats["NATS<br/>athena.identified_presence.arrived"]
+  apollo["apollo<br/>visit ingest"]
+
+  mock --> adapter
+  future -. later .-> adapter
+  adapter --> read
+  read --> cli
+  read --> api
+  read --> metrics
+  adapter --> publish
+  helper --> publish
+  publish --> nats --> apollo
