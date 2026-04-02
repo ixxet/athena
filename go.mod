@@ -4,7 +4,7 @@ go 1.23.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.1
-	github.com/ixxet/ashton-proto v0.2.1-0.20260402004946-30ed2634aa7e
+	github.com/ixxet/ashton-proto v0.2.2-0.20260402162934-ae782137a87a
 	github.com/nats-io/nats.go v1.47.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.1

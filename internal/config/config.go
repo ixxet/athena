@@ -9,15 +9,16 @@ import (
 )
 
 type Config struct {
-	HTTPAddr                  string
-	Adapter                   string
-	NATSURL                   string
-	IdentifiedPublishInterval time.Duration
-	MockFacilityID            string
-	MockZoneID                string
-	MockEntries               int
-	MockExits                 int
-	MockIdentifiedTagHashes   []string
+	HTTPAddr                    string
+	Adapter                     string
+	NATSURL                     string
+	IdentifiedPublishInterval   time.Duration
+	MockFacilityID              string
+	MockZoneID                  string
+	MockEntries                 int
+	MockExits                   int
+	MockIdentifiedTagHashes     []string
+	MockIdentifiedExitTagHashes []string
 }
 
 func Load() (Config, error) {
@@ -37,15 +38,16 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:                  getEnv("ATHENA_HTTP_ADDR", ":8080"),
-		Adapter:                   getEnv("ATHENA_ADAPTER", "mock"),
-		NATSURL:                   getEnv("ATHENA_NATS_URL", ""),
-		IdentifiedPublishInterval: interval,
-		MockFacilityID:            getEnv("ATHENA_MOCK_FACILITY_ID", "ashtonbee"),
-		MockZoneID:                getEnv("ATHENA_MOCK_ZONE_ID", ""),
-		MockEntries:               entries,
-		MockExits:                 exits,
-		MockIdentifiedTagHashes:   splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", "")),
+		HTTPAddr:                    getEnv("ATHENA_HTTP_ADDR", ":8080"),
+		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
+		NATSURL:                     getEnv("ATHENA_NATS_URL", ""),
+		IdentifiedPublishInterval:   interval,
+		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", "ashtonbee"),
+		MockZoneID:                  getEnv("ATHENA_MOCK_ZONE_ID", ""),
+		MockEntries:                 entries,
+		MockExits:                   exits,
+		MockIdentifiedTagHashes:     splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", "")),
+		MockIdentifiedExitTagHashes: splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_EXIT_TAG_HASHES", "")),
 	}
 
 	if cfg.MockEntries < 0 {

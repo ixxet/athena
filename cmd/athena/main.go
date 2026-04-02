@@ -94,12 +94,15 @@ func newServeCmd() *cobra.Command {
 				)
 				go func() {
 					if err := worker.Run(cmd.Context()); err != nil {
-						slog.Error("identified arrival publisher stopped", "error", err)
+						slog.Error("identified presence publisher stopped", "error", err)
 					}
 				}()
 				slog.Info(
-					"identified arrival publisher enabled",
-					"subject", protoevents.SubjectIdentifiedPresenceArrived,
+					"identified presence publisher enabled",
+					"subjects", []string{
+						protoevents.SubjectIdentifiedPresenceArrived,
+						protoevents.SubjectIdentifiedPresenceDeparted,
+					},
 					"interval", cfg.IdentifiedPublishInterval.String(),
 				)
 			}
@@ -202,7 +205,7 @@ func newPresenceCmd() *cobra.Command {
 			}
 			defer closePublisher()
 
-			published, err := publish.NewService(application.adapter, publisher).Publish(cmd.Context())
+			published, err := publish.NewService(application.adapter, publisher).PublishArrivals(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -231,6 +234,55 @@ func newPresenceCmd() *cobra.Command {
 	publishCmd.Flags().StringVar(&publishFormat, "format", "text", "output format: text or json")
 	presenceCmd.AddCommand(publishCmd)
 
+	departurePublishCmd := &cobra.Command{
+		Use:   "publish-identified-departures",
+		Short: "Publish identified departure events.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+
+			application, err := buildApp(cfg)
+			if err != nil {
+				return err
+			}
+
+			publisher, closePublisher, err := newPublisherHandle(cfg)
+			if err != nil {
+				return err
+			}
+			defer closePublisher()
+
+			published, err := publish.NewService(application.adapter, publisher).PublishDepartures(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			switch publishFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(map[string]any{
+					"subject":         protoevents.SubjectIdentifiedPresenceDeparted,
+					"published_count": published,
+				})
+			case "text":
+				_, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"subject=%s published_count=%d\n",
+					protoevents.SubjectIdentifiedPresenceDeparted,
+					published,
+				)
+				return err
+			default:
+				return fmt.Errorf("unsupported format %q", publishFormat)
+			}
+		},
+	}
+	departurePublishCmd.Flags().StringVar(&publishFormat, "format", "text", "output format: text or json")
+	presenceCmd.AddCommand(departurePublishCmd)
+
 	return presenceCmd
 }
 
@@ -247,11 +299,12 @@ func buildApp(cfg config.Config) (*app, error) {
 	switch cfg.Adapter {
 	case "mock":
 		mockAdapter := adapter.NewMockAdapter(adapter.MockConfig{
-			FacilityID:          cfg.MockFacilityID,
-			ZoneID:              cfg.MockZoneID,
-			Entries:             cfg.MockEntries,
-			Exits:               cfg.MockExits,
-			IdentifiedTagHashes: cfg.MockIdentifiedTagHashes,
+			FacilityID:              cfg.MockFacilityID,
+			ZoneID:                  cfg.MockZoneID,
+			Entries:                 cfg.MockEntries,
+			Exits:                   cfg.MockExits,
+			IdentifiedTagHashes:     cfg.MockIdentifiedTagHashes,
+			IdentifiedExitTagHashes: cfg.MockIdentifiedExitTagHashes,
 		})
 		service := presence.NewService(mockAdapter)
 		readPath := presence.NewReadPath(service, domain.OccupancyFilter{

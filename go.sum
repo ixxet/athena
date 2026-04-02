@@ -24,6 +24,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/ixxet/ashton-proto v0.2.1-0.20260402004946-30ed2634aa7e h1:Q/WC3B5onervencjcKoxfD7FuToPrC0r2WIXCNUzXDs=
 github.com/ixxet/ashton-proto v0.2.1-0.20260402004946-30ed2634aa7e/go.mod h1:Ees0YEkL/mhvzkOlZtUX8TrZWamM8/MeuIvRLPfmP60=
+github.com/ixxet/ashton-proto v0.2.2-0.20260402162934-ae782137a87a h1:34vnD8XysnLfeg5RRleAdFkFRkH79YG/XLorOP/b3OQ=
+github.com/ixxet/ashton-proto v0.2.2-0.20260402162934-ae782137a87a/go.mod h1:Ees0YEkL/mhvzkOlZtUX8TrZWamM8/MeuIvRLPfmP60=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=

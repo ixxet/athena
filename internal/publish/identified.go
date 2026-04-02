@@ -68,6 +68,24 @@ func (s *Service) BuildBatch(ctx context.Context) ([]Message, error) {
 	return BuildBatch(events)
 }
 
+func (s *Service) BuildArrivalBatch(ctx context.Context) ([]Message, error) {
+	events, err := s.adapter.ListEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return BuildDirectionalBatch(events, domain.DirectionIn)
+}
+
+func (s *Service) BuildDepartureBatch(ctx context.Context) ([]Message, error) {
+	events, err := s.adapter.ListEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return BuildDirectionalBatch(events, domain.DirectionOut)
+}
+
 func (s *Service) Publish(ctx context.Context) (int, error) {
 	batch, err := s.BuildBatch(ctx)
 	if err != nil {
@@ -77,13 +95,44 @@ func (s *Service) Publish(ctx context.Context) (int, error) {
 	return PublishBatch(ctx, s.publisher, batch)
 }
 
+func (s *Service) PublishArrivals(ctx context.Context) (int, error) {
+	batch, err := s.BuildArrivalBatch(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return PublishBatch(ctx, s.publisher, batch)
+}
+
+func (s *Service) PublishDepartures(ctx context.Context) (int, error) {
+	batch, err := s.BuildDepartureBatch(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return PublishBatch(ctx, s.publisher, batch)
+}
+
 func BuildBatch(events []domain.PresenceEvent) ([]Message, error) {
+	return BuildDirectionalBatch(events, domain.DirectionIn, domain.DirectionOut)
+}
+
+func BuildDirectionalBatch(events []domain.PresenceEvent, directions ...domain.PresenceDirection) ([]Message, error) {
+	allowedDirections := make(map[domain.PresenceDirection]struct{}, len(directions))
+	for _, direction := range directions {
+		allowedDirections[direction] = struct{}{}
+	}
+
 	batch := make([]Message, 0, len(events))
 	for _, event := range events {
+		if _, ok := allowedDirections[event.Direction]; !ok {
+			continue
+		}
+
 		message, include, err := buildMessage(event)
 		if err != nil {
-			slog.Warn("identified arrival rejected", "event_id", event.ID, "error", err)
-			return nil, fmt.Errorf("build identified arrival %q: %w", event.ID, err)
+			slog.Warn("identified presence rejected", "event_id", event.ID, "direction", event.Direction, "error", err)
+			return nil, fmt.Errorf("build identified presence %q: %w", event.ID, err)
 		}
 		if !include {
 			continue
@@ -99,10 +148,10 @@ func PublishBatch(ctx context.Context, publisher Publisher, batch []Message) (in
 	published := 0
 	for _, message := range batch {
 		if err := publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
-			slog.Error("identified arrival publish failed", "event_id", message.ID, "subject", message.Subject, "error", err)
-			return published, fmt.Errorf("publish identified arrival %q on %s: %w", message.ID, message.Subject, err)
+			slog.Error("identified presence publish failed", "event_id", message.ID, "subject", message.Subject, "error", err)
+			return published, fmt.Errorf("publish identified presence %q on %s: %w", message.ID, message.Subject, err)
 		}
-		slog.Info("identified arrival published", "event_id", message.ID, "subject", message.Subject)
+		slog.Info("identified presence published", "event_id", message.ID, "subject", message.Subject)
 		published++
 	}
 
@@ -110,17 +159,23 @@ func PublishBatch(ctx context.Context, publisher Publisher, batch []Message) (in
 }
 
 func buildMessage(event domain.PresenceEvent) (Message, bool, error) {
-	if event.Direction != domain.DirectionIn {
-		slog.Debug("identified arrival skipped", "event_id", event.ID, "reason", "non_arrival")
-		return Message{}, false, nil
-	}
-
 	if strings.TrimSpace(event.ExternalIdentityHash) == "" {
-		slog.Debug("identified arrival skipped", "event_id", event.ID, "reason", "anonymous")
+		slog.Debug("identified presence skipped", "event_id", event.ID, "direction", event.Direction, "reason", "anonymous")
 		return Message{}, false, nil
 	}
 
-	if err := validateIdentifiedArrival(event); err != nil {
+	switch event.Direction {
+	case domain.DirectionIn:
+		return buildArrivalMessage(event)
+	case domain.DirectionOut:
+		return buildDepartureMessage(event)
+	default:
+		return Message{}, false, fmt.Errorf("identified presence %q has unsupported direction %q", event.ID, event.Direction)
+	}
+}
+
+func buildArrivalMessage(event domain.PresenceEvent) (Message, bool, error) {
+	if err := validateIdentifiedPresenceEvent(event, "arrival"); err != nil {
 		return Message{}, false, err
 	}
 
@@ -151,21 +206,53 @@ func buildMessage(event domain.PresenceEvent) (Message, bool, error) {
 	}, true, nil
 }
 
-func validateIdentifiedArrival(event domain.PresenceEvent) error {
+func buildDepartureMessage(event domain.PresenceEvent) (Message, bool, error) {
+	if err := validateIdentifiedPresenceEvent(event, "departure"); err != nil {
+		return Message{}, false, err
+	}
+
+	source, err := toProtoPresenceSource(event.Source)
+	if err != nil {
+		return Message{}, false, fmt.Errorf("identified departure %q source: %w", event.ID, err)
+	}
+
+	payload, err := protoevents.MarshalIdentifiedPresenceDeparted(protoevents.IdentifiedPresenceDepartedEvent{
+		ID:        event.ID,
+		Timestamp: event.RecordedAt.UTC(),
+		Data: &athenav1.IdentifiedPresenceDeparted{
+			FacilityId:           event.FacilityID,
+			ZoneId:               event.ZoneID,
+			ExternalIdentityHash: event.ExternalIdentityHash,
+			Source:               source,
+			RecordedAt:           timestamppb.New(event.RecordedAt.UTC()),
+		},
+	})
+	if err != nil {
+		return Message{}, false, err
+	}
+
+	return Message{
+		ID:      event.ID,
+		Subject: protoevents.SubjectIdentifiedPresenceDeparted,
+		Payload: payload,
+	}, true, nil
+}
+
+func validateIdentifiedPresenceEvent(event domain.PresenceEvent, kind string) error {
 	if strings.TrimSpace(event.ID) == "" {
-		return fmt.Errorf("identified arrival missing id")
+		return fmt.Errorf("identified %s missing id", kind)
 	}
 	if strings.TrimSpace(event.FacilityID) == "" {
-		return fmt.Errorf("identified arrival %q missing facility_id", event.ID)
+		return fmt.Errorf("identified %s %q missing facility_id", kind, event.ID)
 	}
 	if strings.TrimSpace(event.ExternalIdentityHash) == "" {
-		return fmt.Errorf("identified arrival %q missing external_identity_hash", event.ID)
+		return fmt.Errorf("identified %s %q missing external_identity_hash", kind, event.ID)
 	}
 	if event.RecordedAt.IsZero() {
-		return fmt.Errorf("identified arrival %q missing recorded_at", event.ID)
+		return fmt.Errorf("identified %s %q missing recorded_at", kind, event.ID)
 	}
 	if _, err := toProtoPresenceSource(event.Source); err != nil {
-		return fmt.Errorf("identified arrival %q source: %w", event.ID, err)
+		return fmt.Errorf("identified %s %q source: %w", kind, event.ID, err)
 	}
 
 	return nil

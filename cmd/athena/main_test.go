@@ -156,3 +156,47 @@ func TestPresencePublishIdentifiedJSONOutput(t *testing.T) {
 		t.Fatalf("publisher.payloads[0] = %q, want tag_tracer2_001", publisher.payloads[0])
 	}
 }
+
+func TestPresencePublishIdentifiedDeparturesJSONOutput(t *testing.T) {
+	t.Setenv("ATHENA_ADAPTER", "mock")
+	t.Setenv("ATHENA_NATS_URL", "nats://example")
+	t.Setenv("ATHENA_MOCK_FACILITY_ID", "ashtonbee")
+	t.Setenv("ATHENA_MOCK_ENTRIES", "0")
+	t.Setenv("ATHENA_MOCK_EXITS", "2")
+	t.Setenv("ATHENA_MOCK_IDENTIFIED_EXIT_TAG_HASHES", "tag_tracer5_001")
+
+	publisher := &recordingPublisher{}
+	previousFactory := newPublisherHandle
+	newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
+		return publisher, func() error { return nil }, nil
+	}
+	defer func() {
+		newPublisherHandle = previousFactory
+	}()
+
+	output, err := executeRoot(t, "presence", "publish-identified-departures", "--format", "json")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var response publishOutput
+	if err := json.Unmarshal([]byte(output), &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if response.Subject != protoevents.SubjectIdentifiedPresenceDeparted {
+		t.Fatalf("response.Subject = %q, want %q", response.Subject, protoevents.SubjectIdentifiedPresenceDeparted)
+	}
+	if response.PublishedCount != 1 {
+		t.Fatalf("response.PublishedCount = %d, want 1", response.PublishedCount)
+	}
+	if len(publisher.subjects) != 1 {
+		t.Fatalf("len(publisher.subjects) = %d, want 1", len(publisher.subjects))
+	}
+	if publisher.subjects[0] != protoevents.SubjectIdentifiedPresenceDeparted {
+		t.Fatalf("publisher.subjects[0] = %q, want %q", publisher.subjects[0], protoevents.SubjectIdentifiedPresenceDeparted)
+	}
+	if !bytes.Contains(publisher.payloads[0], []byte(`"external_identity_hash":"tag_tracer5_001"`)) {
+		t.Fatalf("publisher.payloads[0] = %q, want tag_tracer5_001", publisher.payloads[0])
+	}
+}

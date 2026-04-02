@@ -34,6 +34,14 @@ func TestWorkerRunOnceDedupesPublishedEvents(t *testing.T) {
 					Source:               domain.SourceMock,
 					RecordedAt:           recordedAt,
 				},
+				{
+					ID:                   "mock-out-001",
+					FacilityID:           "ashtonbee",
+					ExternalIdentityHash: "tag_tracer5_001",
+					Direction:            domain.DirectionOut,
+					Source:               domain.SourceMock,
+					RecordedAt:           recordedAt.Add(time.Minute),
+				},
 			},
 		}, publisher),
 		time.Second,
@@ -48,13 +56,13 @@ func TestWorkerRunOnceDedupesPublishedEvents(t *testing.T) {
 		t.Fatalf("second RunOnce() error = %v", err)
 	}
 
-	if firstPublished != 1 {
-		t.Fatalf("first RunOnce() published = %d, want 1", firstPublished)
+	if firstPublished != 2 {
+		t.Fatalf("first RunOnce() published = %d, want 2", firstPublished)
 	}
 	if secondPublished != 0 {
 		t.Fatalf("second RunOnce() published = %d, want 0", secondPublished)
 	}
-	if len(publisher.messages) != 1 {
-		t.Fatalf("len(publisher.messages) = %d, want 1", len(publisher.messages))
+	if len(publisher.messages) != 2 {
+		t.Fatalf("len(publisher.messages) = %d, want 2", len(publisher.messages))
 	}
 }
