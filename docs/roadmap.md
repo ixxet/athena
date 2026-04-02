@@ -36,6 +36,9 @@ Tracer 1 now has a stable narrow read slice:
 - Tracer 2 and Tracer 5 now publish identified arrival and departure events,
   emit bytes from the shared `ashton-proto` runtime contract, and keep
   anonymous presence out of the APOLLO visit path
+- Milestone 1.5 now proves the live GitOps slice can publish a bounded
+  identified arrival through in-cluster NATS and into APOLLO without widening
+  beyond the mock-backed visit lifecycle path
 
 ## Tracer Ownership
 

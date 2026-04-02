@@ -118,6 +118,8 @@ still intentionally left to downstream idempotency.
   shared `ashton-proto` helper code
 - local manual smoke has already been used to exercise both one-shot publish and
   worker-driven publish against real NATS
+- the bounded live cluster deployment now proves the identified arrival path can
+  publish from ATHENA through in-cluster NATS and into APOLLO visit history
 
 ### Real but intentionally narrow
 
@@ -126,6 +128,8 @@ still intentionally left to downstream idempotency.
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
   the only cross-repo slice that is real today
+- the live cluster proof still uses the mock adapter and one known claimed tag;
+  it does not widen ATHENA into a broader ingress rollout
 
 ### Authored but not yet active
 
