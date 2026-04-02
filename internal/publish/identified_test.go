@@ -127,3 +127,33 @@ func TestBuildBatchRejectsUnsupportedSource(t *testing.T) {
 		t.Fatal("BuildBatch() error = nil, want unsupported source error")
 	}
 }
+
+func TestFlushContextAddsDeadlineWhenMissing(t *testing.T) {
+	ctx, cancel := flushContext(context.Background(), time.Second)
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("flushContext() deadline missing, want timeout-backed context")
+	}
+	if time.Until(deadline) <= 0 {
+		t.Fatalf("flushContext() deadline = %s, want future deadline", deadline)
+	}
+}
+
+func TestFlushContextPreservesExistingDeadline(t *testing.T) {
+	parent, parentCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer parentCancel()
+
+	ctx, cancel := flushContext(parent, time.Second)
+	defer cancel()
+
+	parentDeadline, parentOK := parent.Deadline()
+	deadline, ok := ctx.Deadline()
+	if !parentOK || !ok {
+		t.Fatal("flushContext() deadline missing, want existing deadline preserved")
+	}
+	if !deadline.Equal(parentDeadline) {
+		t.Fatalf("flushContext() deadline = %s, want %s", deadline, parentDeadline)
+	}
+}
