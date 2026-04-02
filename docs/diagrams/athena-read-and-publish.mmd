@@ -9,10 +9,10 @@ flowchart LR
   cli["CLI<br/>athena presence count"]
   api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count"]
   metrics["Prometheus<br/>athena_current_occupancy"]
-  publish["identified-arrival publisher"]
+  publish["identified-presence publisher"]
   helper["ashton-proto<br/>runtime helper"]
-  nats["NATS<br/>athena.identified_presence.arrived"]
-  apollo["apollo<br/>visit ingest"]
+  nats["NATS<br/>athena.identified_presence.arrived<br/>athena.identified_presence.departed"]
+  apollo["apollo<br/>visit ingest and close"]
 
   mock --> adapter
   future -. later .-> adapter

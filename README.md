@@ -5,8 +5,9 @@ presence, ingress source handling, occupancy visibility, and the first event
 publication path that other repos depend on.
 
 > Current real slice: mock-backed presence input, one canonical occupancy read
-> path shared by CLI, HTTP, and Prometheus, plus identified-arrival event
-> publication through the shared `ashton-proto` runtime contract.
+> path shared by CLI, HTTP, and Prometheus, plus identified arrival and
+> departure event publication through the shared `ashton-proto` runtime
+> contract.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
@@ -29,10 +30,10 @@ flowchart LR
   cli["CLI<br/>athena presence count"]
   api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count"]
   metrics["Prometheus<br/>athena_current_occupancy"]
-  publish["identified-arrival publisher"]
+  publish["identified-presence publisher"]
   helper["ashton-proto<br/>runtime helper"]
-  nats["NATS<br/>athena.identified_presence.arrived"]
-  apollo["apollo<br/>visit ingest"]
+  nats["NATS<br/>athena.identified_presence.arrived<br/>athena.identified_presence.departed"]
+  apollo["apollo<br/>visit ingest and close"]
 
   mock --> adapter
   future -. later .-> adapter
@@ -54,8 +55,9 @@ flowchart LR
 | Prometheus metrics | `GET /metrics` | Real | Exposes `athena_current_occupancy` from the same read path |
 | Serve command | `athena serve` | Real | Starts the HTTP server and can optionally run the publish worker |
 | CLI count | `athena presence count --format text|json` | Real | Uses the same read path as HTTP and Prometheus |
-| One-shot publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
-| Background publish worker | `athena serve` with `ATHENA_NATS_URL` | Real | Dedupes in-process and republishes on a configured interval |
+| One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
+| One-shot departure publish | `athena presence publish-identified-departures` | Real | Publishes the current identified-departure batch through NATS |
+| Background publish worker | `athena serve` with `ATHENA_NATS_URL` | Real | Dedupes in-process and republishes identified arrivals and departures on a configured interval |
 | Prediction endpoints | - | Planned | Preserved in ADRs, not implemented in runtime |
 | Real ingress adapters | - | Planned | Mock is the only active adapter today |
 
@@ -65,9 +67,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | Service runtime | Go 1.23 | Instituted | First executable Go service in the platform |
 | HTTP router | chi | Instituted | Minimal API surface over `net/http` |
-| CLI | Cobra | Instituted | `serve`, `presence count`, and `publish-identified` are real |
+| CLI | Cobra | Instituted | `serve`, `presence count`, `publish-identified`, and `publish-identified-departures` are real |
 | Metrics | `prometheus/client_golang` | Instituted | Reads through the same default occupancy path as CLI and HTTP |
-| Eventing | NATS | Instituted | Used for identified-arrival publication |
+| Eventing | NATS | Instituted | Used for identified visit-lifecycle publication |
 | Shared contract | `ashton-proto` generated types + runtime helper | Instituted | Publishes bytes from the shared contract path |
 | Adapter model | Mock adapter | Instituted | Deterministic fixtures back the current read slice |
 | Database schema | PostgreSQL migration files | Authored, not active in runtime | The current executable slice does not yet query Postgres |
@@ -83,7 +85,7 @@ flowchart LR
 | physical presence events | member auth |
 | occupancy counts and source classification | profile visibility and availability intent |
 | ingress-source normalization | workout history |
-| identified-arrival publication to the shared event bus | matchmaking and lobby state |
+| identified visit-lifecycle publication to the shared event bus | matchmaking and lobby state |
 
 ATHENA is the physical truth layer. Tap-in or presence changes what happened in
 the facility. It does not decide whether someone wants to be visible,
@@ -94,10 +96,10 @@ recruitable, or part of a team flow. That intent lives in APOLLO.
 | Step | Current Behavior |
 | --- | --- |
 | Source events enter ATHENA | The mock adapter returns deterministic presence fixtures |
-| ATHENA filters for publishable arrivals | Only identified `in` events qualify |
+| ATHENA filters for publishable visit lifecycle events | Only identified `in` and `out` events qualify |
 | ATHENA builds wire bytes | Publication uses the shared `ashton-proto` runtime helper, not a private JSON struct |
-| ATHENA publishes to NATS | Subject is `athena.identified_presence.arrived` |
-| APOLLO consumes the event | Downstream visit creation stays idempotent and separate from workout logging |
+| ATHENA publishes to NATS | Subjects are `athena.identified_presence.arrived` and `athena.identified_presence.departed` |
+| APOLLO consumes the events | Downstream visit open/close stays idempotent and separate from workout or lobby state |
 
 The publish worker keeps a process-local seen set so it does not republish the
 same mock arrivals on every polling interval. Cross-restart replay handling is
@@ -112,8 +114,8 @@ still intentionally left to downstream idempotency.
   negative
 - CLI, HTTP, and Prometheus all read through one canonical occupancy path
 - config validation fails fast for invalid adapter and interval settings
-- the identified-arrival path can publish through NATS using shared
-  `ashton-proto` helper code
+- the identified arrival and departure paths can publish through NATS using
+  shared `ashton-proto` helper code
 - local manual smoke has already been used to exercise both one-shot publish and
   worker-driven publish against real NATS
 
@@ -122,8 +124,8 @@ still intentionally left to downstream idempotency.
 - only the mock adapter is active today
 - the API surface is limited to health and occupancy count
 - the metric surface is intentionally small
-- publication is limited to identified arrivals because that is the only
-  cross-repo slice that is real today
+- publication is limited to identified visit lifecycle events because that is
+  the only cross-repo slice that is real today
 
 ### Authored but not yet active
 
@@ -152,7 +154,7 @@ still intentionally left to downstream idempotency.
 | `cmd/athena/` | CLI entrypoint and serve command |
 | `internal/adapter/` | active adapter interface and mock implementation |
 | `internal/presence/` | canonical occupancy and presence read path |
-| `internal/publish/` | identified-arrival build and publish flow |
+| `internal/publish/` | identified visit-lifecycle build and publish flow |
 | `internal/server/` | HTTP routes and health/count handlers |
 | `internal/metrics/` | Prometheus registry and gauge wiring |
 | `db/migrations/` | first authored relational schema |

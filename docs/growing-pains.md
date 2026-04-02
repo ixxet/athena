@@ -53,3 +53,13 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   cover that branch with a regression test.
   Rule: every broker flush path needs an explicit deadline, and one-shot publish
   commands should be smoke-tested against a real broker before a tracer closes.
+
+- Symptom: the Tracer 5 departure publisher code compiled in `ashton-proto`,
+  but ATHENA still failed to build against the new shared contract symbols.
+  Cause: this repo intentionally pins `ashton-proto` as a module dependency
+  instead of assuming a local workspace replace, so the new departure helper and
+  proto types were not available until the dependency moved forward too.
+  Fix: bump the `ashton-proto` module in the same tracer that starts using new
+  shared contract symbols, then rerun the publish and CLI suites.
+  Rule: when ATHENA adopts a new shared contract surface, the producer code and
+  the module pin must move together in one verified change.
