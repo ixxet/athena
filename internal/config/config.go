@@ -13,12 +13,15 @@ type Config struct {
 	Adapter                     string
 	NATSURL                     string
 	IdentifiedPublishInterval   time.Duration
+	DefaultFacilityID           string
+	DefaultZoneID               string
 	MockFacilityID              string
 	MockZoneID                  string
 	MockEntries                 int
 	MockExits                   int
 	MockIdentifiedTagHashes     []string
 	MockIdentifiedExitTagHashes []string
+	CSVPath                     string
 }
 
 func Load() (Config, error) {
@@ -42,12 +45,15 @@ func Load() (Config, error) {
 		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
 		NATSURL:                     getEnv("ATHENA_NATS_URL", ""),
 		IdentifiedPublishInterval:   interval,
-		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", "ashtonbee"),
-		MockZoneID:                  getEnv("ATHENA_MOCK_ZONE_ID", ""),
+		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
+		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
+		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),
+		MockZoneID:                  getEnv("ATHENA_MOCK_ZONE_ID", getEnv("ATHENA_DEFAULT_ZONE_ID", "")),
 		MockEntries:                 entries,
 		MockExits:                   exits,
 		MockIdentifiedTagHashes:     splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", "")),
 		MockIdentifiedExitTagHashes: splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_EXIT_TAG_HASHES", "")),
+		CSVPath:                     getEnv("ATHENA_CSV_PATH", ""),
 	}
 
 	if cfg.MockEntries < 0 {
@@ -63,8 +69,13 @@ func Load() (Config, error) {
 	switch cfg.Adapter {
 	case "mock":
 		return cfg, nil
+	case "csv":
+		if strings.TrimSpace(cfg.CSVPath) == "" {
+			return Config{}, fmt.Errorf("ATHENA_CSV_PATH is required when ATHENA_ADAPTER=csv")
+		}
+		return cfg, nil
 	default:
-		return Config{}, fmt.Errorf("invalid ATHENA_ADAPTER %q: supported values: mock", cfg.Adapter)
+		return Config{}, fmt.Errorf("invalid ATHENA_ADAPTER %q: supported values: mock, csv", cfg.Adapter)
 	}
 }
 

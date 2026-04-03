@@ -296,6 +296,11 @@ func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
 }
 
 func buildApp(cfg config.Config) (*app, error) {
+	defaultFilter := domain.OccupancyFilter{
+		FacilityID: cfg.DefaultFacilityID,
+		ZoneID:     cfg.DefaultZoneID,
+	}
+
 	switch cfg.Adapter {
 	case "mock":
 		mockAdapter := adapter.NewMockAdapter(adapter.MockConfig{
@@ -307,15 +312,28 @@ func buildApp(cfg config.Config) (*app, error) {
 			IdentifiedExitTagHashes: cfg.MockIdentifiedExitTagHashes,
 		})
 		service := presence.NewService(mockAdapter)
-		readPath := presence.NewReadPath(service, domain.OccupancyFilter{
-			FacilityID: cfg.MockFacilityID,
-			ZoneID:     cfg.MockZoneID,
-		})
+		readPath := presence.NewReadPath(service, defaultFilter)
 
 		return &app{
 			adapter:     mockAdapter,
 			readPath:    readPath,
 			adapterName: mockAdapter.Name(),
+		}, nil
+	case "csv":
+		csvAdapter, err := adapter.NewCSVAdapter(adapter.CSVConfig{
+			Path: cfg.CSVPath,
+		}, slog.Default())
+		if err != nil {
+			return nil, err
+		}
+
+		service := presence.NewService(csvAdapter)
+		readPath := presence.NewReadPath(service, defaultFilter)
+
+		return &app{
+			adapter:     csvAdapter,
+			readPath:    readPath,
+			adapterName: csvAdapter.Name(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q", cfg.Adapter)

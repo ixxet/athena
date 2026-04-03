@@ -13,6 +13,7 @@ type PresenceSource string
 
 const (
 	SourceMock PresenceSource = "mock"
+	SourceCSV  PresenceSource = "csv"
 )
 
 type PresenceEvent struct {
