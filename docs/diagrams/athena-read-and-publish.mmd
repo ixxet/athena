@@ -1,7 +1,8 @@
 flowchart LR
   subgraph inputs["Ingress sources"]
-    mock["mock adapter<br/>active today"]
-    future["rfid / database / csv / tof<br/>planned later"]
+    mock["mock adapter<br/>still available"]
+    csv["csv adapter<br/>first source-backed line"]
+    future["rfid / database / tof<br/>planned later"]
   end
 
   adapter["adapter layer"]
@@ -15,6 +16,7 @@ flowchart LR
   apollo["apollo<br/>visit ingest and close"]
 
   mock --> adapter
+  csv --> adapter
   future -. later .-> adapter
   adapter --> read
   read --> cli

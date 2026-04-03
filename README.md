@@ -4,10 +4,10 @@ ATHENA is the first executable service in ASHTON. It owns physical truth:
 presence, ingress source handling, occupancy visibility, and the first event
 publication path that other repos depend on.
 
-> Current real slice: mock-backed presence input, one canonical occupancy read
-> path shared by CLI, HTTP, and Prometheus, plus identified arrival and
-> departure event publication through the shared `ashton-proto` runtime
-> contract.
+> Current real slice: mock-backed and CSV-backed presence input, one canonical
+> occupancy read path shared by CLI, HTTP, and Prometheus, plus identified
+> arrival and departure event publication through the shared `ashton-proto`
+> runtime contract.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
@@ -21,8 +21,9 @@ The standalone Mermaid source for this flow lives at
 ```mermaid
 flowchart LR
   subgraph inputs["Ingress sources"]
-    mock["mock adapter<br/>active today"]
-    future["rfid / database / csv / tof<br/>planned later"]
+    mock["mock adapter<br/>still available"]
+    csv["csv adapter<br/>first source-backed line"]
+    future["rfid / database / tof<br/>planned later"]
   end
 
   adapter["adapter layer"]
@@ -36,6 +37,7 @@ flowchart LR
   apollo["apollo<br/>visit ingest and close"]
 
   mock --> adapter
+  csv --> adapter
   future -. later .-> adapter
   adapter --> read
   read --> cli
@@ -58,25 +60,27 @@ flowchart LR
 | One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
 | One-shot departure publish | `athena presence publish-identified-departures` | Real | Publishes the current identified-departure batch through NATS |
 | Background publish worker | `athena serve` with `ATHENA_NATS_URL` | Real | Dedupes in-process and republishes identified arrivals and departures on a configured interval |
+| CSV ingress adapter | `ATHENA_ADAPTER=csv` plus `ATHENA_CSV_PATH` | Real | Loads a bounded physical-truth CSV export into the canonical occupancy read model |
 | Prediction endpoints | - | Planned | Preserved in ADRs, not implemented in runtime |
-| Real ingress adapters | - | Planned | Mock is the only active adapter today |
+| Additional real ingress adapters | - | Planned | CSV is the only source-backed adapter today |
 
 ## Technology Stack
 
-| Layer | Technology | Status | Notes |
-| --- | --- | --- | --- |
-| Service runtime | Go 1.23 | Instituted | First executable Go service in the platform |
-| HTTP router | chi | Instituted | Minimal API surface over `net/http` |
-| CLI | Cobra | Instituted | `serve`, `presence count`, `publish-identified`, and `publish-identified-departures` are real |
-| Metrics | `prometheus/client_golang` | Instituted | Reads through the same default occupancy path as CLI and HTTP |
-| Eventing | NATS | Instituted | Used for identified visit-lifecycle publication |
-| Shared contract | `ashton-proto` generated types + runtime helper | Instituted | Publishes bytes from the shared contract path |
-| Adapter model | Mock adapter | Instituted | Deterministic fixtures back the current read slice |
-| Database schema | PostgreSQL migration files | Authored, not active in runtime | The current executable slice does not yet query Postgres |
-| Container build | Docker multi-stage build | Instituted | Image build path is real |
-| CI | GitHub Actions image workflow | Instituted | Build and image workflow exist in repo |
-| Redis utility layer | Redis | Deferred | Useful later for hot counters and short-lived aggregates |
-| Prediction engine | EWMA + historical binning | Deferred | ADR-preserved design, not runtime truth yet |
+| Layer | Technology | Status | Line | Notes |
+| --- | --- | --- | --- | --- |
+| Service runtime | Go 1.23 | Instituted | `v0.0.x` -> `v0.3.x` | First executable Go service in the platform |
+| HTTP router | chi | Instituted | `v0.1.x` -> `v0.3.x` | Minimal API surface over `net/http` |
+| CLI | Cobra | Instituted | `v0.1.x` -> `v0.3.x` | `serve`, `presence count`, `publish-identified`, and `publish-identified-departures` are real |
+| Metrics | `prometheus/client_golang` | Instituted | `v0.1.x` -> `v0.3.x` | Reads through the same default occupancy path as CLI and HTTP |
+| Eventing | NATS | Instituted | `v0.3.x` | Used for identified visit-lifecycle publication |
+| Shared contract | `ashton-proto` generated types + runtime helper | Instituted | `v0.1.x` -> `v0.3.x` | Publishes bytes from the shared contract path |
+| Adapter model | Mock adapter | Instituted | `v0.1.x` -> `v0.4.x` | Deterministic fixtures remain available for tests and bounded smoke |
+| Real ingress adapter | CSV presence-event adapter | Real | `v0.4.x` | Tracer 10 proves one source-backed ingress line without widening deployment truth |
+| Database schema | PostgreSQL migration files | Authored, not active in runtime | `v0.5.0` | The current executable slice does not yet query Postgres |
+| Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
+| CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
+| Redis utility layer | Redis | Deferred | later than `v0.5.0` | Useful later for hot counters and short-lived aggregates |
+| Prediction engine | EWMA + historical binning | Deferred | `v0.6.0` | ADR-preserved design, not runtime truth yet |
 
 ## Data Ownership And Boundaries
 
@@ -95,7 +99,7 @@ recruitable, or part of a team flow. That intent lives in APOLLO.
 
 | Step | Current Behavior |
 | --- | --- |
-| Source events enter ATHENA | The mock adapter returns deterministic presence fixtures |
+| Source events enter ATHENA | The mock adapter and the CSV adapter both emit physical-truth presence events into the same canonical read model |
 | ATHENA filters for publishable visit lifecycle events | Only identified `in` and `out` events qualify |
 | ATHENA builds wire bytes | Publication uses the shared `ashton-proto` runtime helper, not a private JSON struct |
 | ATHENA publishes to NATS | Subjects are `athena.identified_presence.arrived` and `athena.identified_presence.departed` |
@@ -110,6 +114,7 @@ still intentionally left to downstream idempotency.
 ### Already real in this repo
 
 - deterministic mock fixtures back the first read path
+- a source-backed CSV adapter can now drive the same occupancy read path locally
 - unknown facilities resolve to a safe zero count instead of panicking or going
   negative
 - CLI, HTTP, and Prometheus all read through one canonical occupancy path
@@ -123,7 +128,8 @@ still intentionally left to downstream idempotency.
 
 ### Real but intentionally narrow
 
-- only the mock adapter is active today
+- the CSV adapter is local-runtime proof only and does not widen the existing
+  live deployment claim
 - the API surface is limited to health and occupancy count
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
@@ -140,7 +146,10 @@ still intentionally left to downstream idempotency.
 
 ### Planned next
 
-- real ingress adapters
+The planned release lines below are the authoritative expansion path. These
+bullets are only the short summary.
+
+- additional real ingress adapters beyond the first CSV line
 - broader metrics and diagnostics
 - a Postgres-backed read/write path once the tracer requires persistence
 - capacity prediction once the read path and event history justify it
@@ -151,12 +160,31 @@ still intentionally left to downstream idempotency.
 - broad predictive dashboards before prediction itself is real
 - any member-intent logic that belongs in APOLLO
 
+## Release History
+
+| Release line | Exact tags | Status | What became real | What stayed deferred |
+| --- | --- | --- | --- | --- |
+| `v0.0.x` | `v0.0.1` | Shipped | bootstrap line and first executable repo baseline | stable read path and live deployment proof |
+| `v0.1.x` | `v0.1.0` | Shipped | first mock-backed occupancy read line | lifecycle publish and source-backed ingress |
+| `v0.2.x` | `v0.2.0`, `v0.2.1` | Shipped | read-path hardening and live read deployment line | lifecycle publish and real ingress adapters |
+| `v0.3.x` | `v0.3.0`, `v0.3.1` | Shipped | lifecycle publish line plus bounded live arrival proof through Milestone 1.5 | source-backed ingress rollout, persistence, and prediction |
+
+## Planned Release Lines
+
+| Planned tag | Intended purpose | Restrictions | What it should not do yet |
+| --- | --- | --- | --- |
+| `v0.4.0` | first real ingress adapter for Tracer 10 | keep one source-backed adapter narrow and inspectable | do not widen into persistence or prediction work in the same line |
+| `v0.4.1` | source-backed deployment or live departure-close support line | only widen deployed truth as far as the bounded workstream proves | do not imply broad ATHENA ingress rollout or broader APOLLO product deployment |
+| `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
+| `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
+
 ## Project Structure
 
 | Path | Purpose |
 | --- | --- |
 | `cmd/athena/` | CLI entrypoint and serve command |
-| `internal/adapter/` | active adapter interface and mock implementation |
+| `internal/adapter/` | active adapter interface plus mock and CSV implementations |
+| `docs/runbooks/source-backed-ingress.md` | local operator path for the first source-backed adapter |
 | `internal/presence/` | canonical occupancy and presence read path |
 | `internal/publish/` | identified visit-lifecycle build and publish flow |
 | `internal/server/` | HTTP routes and health/count handlers |
@@ -177,6 +205,7 @@ not the homelab substrate.
 - [Roadmap](docs/roadmap.md)
 - [Growing pains](docs/growing-pains.md)
 - [Mock slice runbook](docs/runbooks/mock-slice.md)
+- [Source-backed ingress runbook](docs/runbooks/source-backed-ingress.md)
 - [Capacity prediction ADR](docs/adr/002-capacity-prediction.md)
 - [ADR index](docs/adr/README.md)
 

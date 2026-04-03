@@ -63,3 +63,24 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   shared contract symbols, then rerun the publish and CLI suites.
   Rule: when ATHENA adopts a new shared contract surface, the producer code and
   the module pin must move together in one verified change.
+
+## 2026-04-03
+
+- Symptom: the first source-backed adapter draft would have made runtime results
+  depend on raw CSV row order.
+  Cause: file exports are a source detail, not a stable runtime ordering
+  contract, but the first parser shape still preserved the incoming row order.
+  Fix: sort parsed events by `recorded_at` and `event_id`, and reject duplicate
+  `event_id` values so repeated loads stay deterministic.
+  Rule: source-backed adapters must normalize ordering explicitly before the
+  runtime depends on exported file shape.
+
+- Symptom: the first CSV adapter draft almost reused mock-specific default
+  facility config for the public read path.
+  Cause: the original default filter lived in `ATHENA_MOCK_*` settings because
+  mock was the only real adapter when the read path was first built.
+  Fix: add adapter-agnostic `ATHENA_DEFAULT_FACILITY_ID` and
+  `ATHENA_DEFAULT_ZONE_ID` while keeping the mock-specific settings for fixture
+  generation.
+  Rule: once more than one adapter is real, shared read-path defaults must stop
+  depending on mock-only config names.

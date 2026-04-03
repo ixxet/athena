@@ -1,0 +1,5 @@
+event_id,facility_id,zone_id,external_identity_hash,direction,recorded_at
+csv-in-001,ashtonbee,lobby,tag-001,in,2026-04-01T08:00:00Z
+csv-in-002,ashtonbee,lobby,,in,2026-04-01T08:05:00Z
+csv-out-001,ashtonbee,lobby,,out,2026-04-01T08:10:00Z
+csv-other-001,other,,tag-002,in,2026-04-01T08:15:00Z

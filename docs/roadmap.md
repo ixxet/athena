@@ -2,46 +2,43 @@
 
 ## Objective
 
-Turn the platform from architecture into reality by shipping one clean end-to-end facility data slice.
+Keep ATHENA moving through narrow physical-truth slices: read path first, then
+publication, then real ingress, then persistence and prediction only when they
+are earned.
 
-## First Implementation Slice
+## Current Line
 
-- wire ATHENA to the minimum contracts from `ashton-proto`
-- implement a mock adapter for presence events
-- keep presence updates separate from matchmaking intent
-- expose current occupancy through one read endpoint
-- expose the same state through one CLI command
-- publish at least one meaningful Prometheus metric
+Current active line: `v0.4.x`
+
+- mock-backed occupancy read path is still real
+- one source-backed CSV ingress adapter is now real locally
+- identified arrival and departure publication is real
+- bounded live in-cluster arrival proof is real through Milestone 1.5
+- deployed truth is unchanged; the live read path still does not claim
+  source-backed ingress
+
+## Planned Release Lines
+
+| Planned tag | Intended purpose | Restrictions | What it should not do yet |
+| --- | --- | --- | --- |
+| `v0.4.1` | source-backed deployment and live departure-close support | only widen deployed truth as far as the bounded workstream proves | do not imply broad ATHENA ingress rollout or broader APOLLO product deployment |
+| `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
+| `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Boundaries
 
-- no real tap-in integration yet
-- no broad predictive engine on day one
-- no PWA or advanced dashboards until the core read path is stable
+- Tracer 9 does not require ATHENA widening by default
+- Tracer 10 keeps ingress physical-truth only and does not widen into
+  deployment, prediction, or social logic
+- keep physical truth separate from member intent and product logic
+- do not activate Redis-backed hot counters before the basic read path needs them
+- do not widen into predictive dashboards before prediction is real
 
-## Exit Criteria
+## Tracer / Workstream Ownership
 
-- a mocked occupancy flow works end to end
-- the repo has one stable read API surface
-- the CLI confirms the same data as the API
-- the service exposes metrics that Prometheus can scrape later
-
-## Current State
-
-Tracer 1 now has a stable narrow read slice:
-
-- occupancy math is unit-tested across clamp, empty, unknown-facility, and multi-facility cases
-- CLI, HTTP, and Prometheus all read through the same default-filtered occupancy path
-- config validation and deterministic mock fixtures are in place before widening toward real adapters
-- Tracer 2 and Tracer 5 now publish identified arrival and departure events,
-  emit bytes from the shared `ashton-proto` runtime contract, and keep
-  anonymous presence out of the APOLLO visit path
-- Milestone 1.5 now proves the live GitOps slice can publish a bounded
-  identified arrival through in-cluster NATS and into APOLLO without widening
-  beyond the mock-backed visit lifecycle path
-
-## Tracer Ownership
-
-- `Tracer 1`: mock presence -> API -> CLI -> metric
-- `Tracer 2`: identified ATHENA arrival event -> APOLLO visit recording
-- `Tracer 5`: identified ATHENA departure event -> APOLLO visit closing
+- `Tracer 1`: first mock-backed read line
+- `Tracer 2`: identified arrival publication
+- `Tracer 5`: identified departure publication
+- `Tracer 10`: first real ingress adapter
+- `Milestone 1.6`: live departure-close proof in-cluster
+- later line: persistence and prediction after source-backed ingress is stable
