@@ -13,6 +13,14 @@ The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
 prediction, and storage plans clearly marked as future work.
 
+## Start Here
+
+| Reader | Start With | Why |
+| --- | --- | --- |
+| Recruiter or interviewer | [`Runtime Surfaces`](#runtime-surfaces), [`Current State Block`](#current-state-block), [`Why ATHENA Matters`](#why-athena-matters) | These sections show the real service boundary quickly |
+| Engineer | [`Architecture`](#architecture), [`Technology Stack`](#technology-stack), [`Known Caveats`](#known-caveats) | These sections show how the service works and where it is still incomplete |
+| Operator | [`docs/runbooks/mock-slice.md`](docs/runbooks/mock-slice.md), [`docs/runbooks/source-backed-ingress.md`](docs/runbooks/source-backed-ingress.md) | These runbooks cover the narrow paths that are actually proven |
+
 ## Architecture
 
 The standalone Mermaid source for this flow lives at
@@ -109,6 +117,15 @@ The publish worker keeps a process-local seen set so it does not republish the
 same mock arrivals on every polling interval. Cross-restart replay handling is
 still intentionally left to downstream idempotency.
 
+## Known Caveats
+
+| Area | Current caveat | Why it matters |
+| --- | --- | --- |
+| Container startup | The Docker image entrypoint launches the binary without `serve`, so the default container command does not start the HTTP service yet | Deployment docs must treat the image as requiring an explicit service command until that is fixed |
+| Persistence | Postgres schema exists, but the active runtime still serves from adapters rather than DB-backed state | Readers should not assume the authored schema is live |
+| Publish dedupe | Republish protection is process-local | Restart safety currently depends on downstream idempotency more than ATHENA memory |
+| Health and metrics | The surfaces are useful, but still narrower than a mature production service would expose | Good for the tracer, not yet the final observability story |
+
 ## Current State Block
 
 ### Already real in this repo
@@ -202,6 +219,7 @@ not the homelab substrate.
 ## Docs Map
 
 - [ATHENA diagram](docs/diagrams/athena-read-and-publish.mmd)
+- [Glossary](docs/glossary.md)
 - [Roadmap](docs/roadmap.md)
 - [Growing pains](docs/growing-pains.md)
 - [Mock slice runbook](docs/runbooks/mock-slice.md)
