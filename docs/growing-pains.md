@@ -84,3 +84,25 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   generation.
   Rule: once more than one adapter is real, shared read-path defaults must stop
   depending on mock-only config names.
+
+## 2026-04-04
+
+- Symptom: the first TouchNet browser bridge draft only handled successful rows,
+  which made it impossible to audit denied taps or reconcile operator actions
+  later.
+  Cause: the first spike treated the bridge as publish-only instead of
+  observation-first ingress.
+  Fix: forward both `pass` and `fail` rows into ATHENA, keep publishing limited
+  to `pass`, and log the richer row context including `account_raw`,
+  `account_type`, `name`, and `status_message`.
+  Rule: for real facility ingress, ATHENA should preserve operator-observable
+  truth even when downstream lifecycle publication stays intentionally narrow.
+
+- Symptom: the first userscript draft assumed a generic table shape instead of
+  the actual TouchNet Verify Account Entry DOM.
+  Cause: the fixture was authored before enough real HTML had been captured from
+  the page.
+  Fix: retarget the script to the real selectors and cell positions, then keep
+  a local fixture aligned with that actual page shape.
+  Rule: browser-bridge automation should be anchored to saved real DOM evidence,
+  not placeholder selectors.

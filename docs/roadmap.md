@@ -30,6 +30,9 @@ Current active line: `v0.4.x`
 - Tracer 9 does not require ATHENA widening by default
 - Tracer 10 keeps ingress physical-truth only and does not widen into
   deployment, prediction, or social logic
+- observed TouchNet pass/fail history is a plausible next ATHENA persistence
+  slice, but operator override workflows should remain separate from the
+  physical-truth ingest boundary
 - keep physical truth separate from member intent and product logic
 - do not activate Redis-backed hot counters before the basic read path needs them
 - do not widen into predictive dashboards before prediction is real
