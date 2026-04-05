@@ -34,9 +34,13 @@ What ATHENA does with that data today:
 
 - logs both `pass` and `fail` observations with full operator context
 - hashes `account_raw` immediately for the canonical publishable identity
-- publishes only `pass` observations as identified arrival or departure events
+- in explicit edge-projection serve mode, feeds the same normalized `pass`
+  event into an in-memory live occupancy projection
+- publishes only accepted `pass` observations as identified arrival or
+  departure events
 - keeps `fail` observations local to ATHENA logs for diagnostics and future
   operator workflows
+- still does not persist append-only edge observations or occupancy snapshots
 
 ## Current Boundary
 
@@ -54,8 +58,8 @@ questions.
 Current boundary split:
 
 - TouchNet decides `pass` or `fail`
-- ATHENA observes that decision and publishes only the canonical safe lifecycle
-  events
+- ATHENA observes that decision, can project live occupancy from `pass`, and
+  publishes only the canonical safe lifecycle events
 - a future admin/staff surface can review failures, correlate identities, and
   record manual overrides or exceptions
 
@@ -238,6 +242,7 @@ Short term:
 - commit the spike as ATHENA ingress work, not as a random side project
 - keep HERMES notes in documentation only until a real admin read or write
   slice is started
+- keep projection in memory only for now; persistence is still deferred
 
 Next likely slices:
 

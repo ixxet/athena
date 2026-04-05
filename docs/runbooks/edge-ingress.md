@@ -4,10 +4,14 @@
 
 Use this runbook to prove the new push-based ATHENA ingress slice:
 
-`TouchNet-shaped source -> POST /api/v1/edge/tap -> NATS -> APOLLO`
+`TouchNet-shaped source -> POST /api/v1/edge/tap -> in-memory occupancy projection + NATS -> APOLLO`
 
-The canonical occupancy read path remains unchanged in this slice. This runbook
-is only about identified arrival and departure publication.
+In explicit edge-projection mode, the same normalized pass event now drives:
+
+- live occupancy projection for `/api/v1/presence/count` and `/metrics`
+- identified arrival or departure publication to NATS
+
+Persistence is still deferred in this slice.
 
 ## Environment
 
@@ -21,10 +25,12 @@ ATHENA_ADAPTER=mock \
 ATHENA_NATS_URL=nats://127.0.0.1:4222 \
 ATHENA_EDGE_HASH_SALT=demo-salt \
 ATHENA_EDGE_TOKENS='entry-node=entry-token,exit-node=exit-token' \
+ATHENA_EDGE_OCCUPANCY_PROJECTION=true \
 go run ./cmd/athena serve
 ```
 
-If the edge config is valid, `/api/v1/edge/tap` is mounted automatically.
+If the edge config is valid, `/api/v1/edge/tap` is mounted automatically and
+`/api/v1/presence/count` now reads from the in-memory edge projection.
 
 ## Raw TouchNet Replay
 
@@ -56,6 +62,8 @@ Expected result:
 
 - the command exits zero
 - ATHENA logs `edge tap accepted`
+- `GET /api/v1/presence/count?facility=ashtonbee&zone=gym-floor` reflects the
+  replayed live projection state
 - identified presence messages publish to the existing NATS subjects
 
 ## Browser Fixture
@@ -78,8 +86,8 @@ Workflow:
    - `zoneId`
 5. If you test against the local HTML fixture, enable Tampermonkey access to file URLs.
 6. Use the fixture buttons to append `Pass` or `Denied` rows.
-7. Confirm that only `Pass` rows are posted and repeated rerenders do not
-   duplicate accepted events.
+7. Confirm that only `Pass` rows affect occupancy and publication, while
+   repeated rerenders do not duplicate accepted events or inflate counts.
 
 ## Chrome Quick Start
 
@@ -114,6 +122,8 @@ operator diagnostics:
 Current behavior:
 
 - `pass` rows are published as identified arrival or departure events
+- `pass` rows also update the in-memory live occupancy projection when
+  `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
 - `fail` rows are accepted as observations and logged, but are not published to
   the current NATS visit-lifecycle subjects
 - published visit events still use the hashed account as the canonical identity
@@ -133,11 +143,14 @@ Admin-facing note:
 
 - `go test ./...`
 - `go test -count=5 ./internal/config ./internal/edge ./internal/touchnet`
-- `go test -count=5 ./internal/publish ./internal/server ./cmd/athena`
+- `go test -count=5 ./internal/presence ./internal/publish ./internal/server ./cmd/athena`
 
 ## Boundaries
 
-- `/api/v1/presence/count` still reads from the configured adapter
+- `/api/v1/presence/count` reads from the in-memory edge projection only when
+  `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`; adapter-backed read paths remain real
+  outside that mode
 - no ATHENA persistence is activated in this slice
 - APOLLO consumers remain unchanged
+- deployment truth is unchanged; this runbook proves the local tracer slice only
 - the userscript is intentionally DOM-based and does not capture raw keystrokes

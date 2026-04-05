@@ -106,3 +106,38 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   a local fixture aligned with that actual page shape.
   Rule: browser-bridge automation should be anchored to saved real DOM evidence,
   not placeholder selectors.
+
+## 2026-04-05
+
+- Symptom: edge ingress and occupancy still behaved like two separate truths,
+  which meant live taps could publish safely but `/api/v1/presence/count` kept
+  reading from adapters only.
+  Cause: the first edge slice stopped at publication and never fed a canonical
+  normalized event into a live projection.
+  Fix: add an explicit in-memory occupancy projector, normalize each `pass`
+  edge tap once, and feed that same normalized event into both the projection
+  updater and the identified publish builder.
+  Rule: when ATHENA grows a new ingress truth, occupancy and publication should
+  share one normalized event path instead of duplicating logic downstream.
+
+- Symptom: the first attempt to make edge-driven occupancy real would have
+  changed the read source implicitly for every `serve` process.
+  Cause: the existing runtime already had real mock/csv adapter paths, so
+  silently swapping them out would have blurred what was actually deployed and
+  what was only proven locally.
+  Fix: gate edge-driven occupancy behind explicit
+  `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config and keep adapter-backed
+  CLI/read paths intact outside that mode.
+  Rule: ATHENA source-of-truth changes must be explicit runtime choices, not
+  accidental side effects of enabling ingress.
+
+- Symptom: repeated `in` rows could have inflated occupancy and double-published
+  identified arrivals if the live projection and publish path stayed
+  independent.
+  Cause: publish eligibility was based only on row validity, not on whether the
+  projected presence state actually changed.
+  Fix: make the projector reject `already_present`, `already_absent`, and stale
+  events deterministically, and only publish after the projector accepts the
+  transition.
+  Rule: the live edge path must be deterministic under duplicate, conflicting,
+  and out-of-order taps before it can be treated as occupancy truth.

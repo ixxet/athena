@@ -8,6 +8,7 @@ flowchart LR
 
   adapter["adapter layer"]
   ingress["push ingress handler"]
+  projection["edge occupancy projection<br/>in-memory, explicit serve mode"]
   read["presence read path<br/>canonical occupancy logic"]
   cli["CLI<br/>athena presence count"]
   api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count<br/>/api/v1/edge/tap"]
@@ -19,7 +20,9 @@ flowchart LR
 
   mock --> adapter
   csv --> adapter
-  edge --> ingress --> publish
+  edge --> ingress --> projection
+  projection --> read
+  projection --> publish
   future -. later .-> adapter
   adapter --> read
   read --> cli

@@ -16,6 +16,9 @@ flowchart LR
   hash["hash account_raw<br/>external_identity_hash"]
   observe["log full observation<br/>account_raw / account_type / name / status_message / result"]
   decision{"result == pass?"}
+  projector["in-memory occupancy projection<br/>facility / zone / hashed identity"]
+  count["GET /api/v1/presence/count<br/>live occupancy"]
+  metrics["GET /metrics<br/>athena_current_occupancy"]
 
   build["build identified presence event"]
   nats["NATS<br/>athena.identified_presence.arrived<br/>athena.identified_presence.departed"]
@@ -32,7 +35,10 @@ flowchart LR
 
   post --> auth --> normalize --> hash --> observe --> decision
 
-  decision -- "pass" --> build --> nats --> apollo
+  decision -- "pass" --> projector
+  projector --> count
+  projector --> metrics
+  projector --> build --> nats --> apollo
   decision -- "fail" --> noPublish
 
   build --> response
