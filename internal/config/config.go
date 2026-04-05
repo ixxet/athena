@@ -13,6 +13,8 @@ type Config struct {
 	Adapter                     string
 	NATSURL                     string
 	IdentifiedPublishInterval   time.Duration
+	EdgeHashSalt                string
+	EdgeTokens                  map[string]string
 	DefaultFacilityID           string
 	DefaultZoneID               string
 	MockFacilityID              string
@@ -45,6 +47,8 @@ func Load() (Config, error) {
 		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
 		NATSURL:                     getEnv("ATHENA_NATS_URL", ""),
 		IdentifiedPublishInterval:   interval,
+		EdgeHashSalt:                getEnv("ATHENA_EDGE_HASH_SALT", ""),
+		EdgeTokens:                  parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
 		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
 		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
 		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),
@@ -64,6 +68,9 @@ func Load() (Config, error) {
 	}
 	if cfg.IdentifiedPublishInterval <= 0 {
 		return Config{}, fmt.Errorf("invalid ATHENA_IDENTIFIED_PUBLISH_INTERVAL %s: value must be > 0", cfg.IdentifiedPublishInterval)
+	}
+	if err := validateEdgeConfig(cfg); err != nil {
+		return Config{}, err
 	}
 
 	switch cfg.Adapter {
@@ -132,4 +139,53 @@ func splitCSV(value string) []string {
 	}
 
 	return out
+}
+
+func parseNodeTokenMap(value string) map[string]string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	pairs := strings.Split(value, ",")
+	out := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		nodeID, token, ok := strings.Cut(pair, "=")
+		if !ok {
+			return map[string]string{
+				"": "",
+			}
+		}
+
+		nodeID = strings.TrimSpace(nodeID)
+		token = strings.TrimSpace(token)
+		out[nodeID] = token
+	}
+
+	return out
+}
+
+func validateEdgeConfig(cfg Config) error {
+	if cfg.EdgeHashSalt == "" && len(cfg.EdgeTokens) == 0 {
+		return nil
+	}
+	if cfg.EdgeHashSalt == "" {
+		return fmt.Errorf("ATHENA_EDGE_HASH_SALT is required when ATHENA_EDGE_TOKENS is set")
+	}
+	if len(cfg.EdgeTokens) == 0 {
+		return fmt.Errorf("ATHENA_EDGE_TOKENS is required when ATHENA_EDGE_HASH_SALT is set")
+	}
+	if cfg.NATSURL == "" {
+		return fmt.Errorf("ATHENA_NATS_URL is required when edge ingress is enabled")
+	}
+
+	for nodeID, token := range cfg.EdgeTokens {
+		if nodeID == "" {
+			return fmt.Errorf("invalid ATHENA_EDGE_TOKENS: entries must be node_id=token")
+		}
+		if token == "" {
+			return fmt.Errorf("invalid ATHENA_EDGE_TOKENS: node %q is missing a token", nodeID)
+		}
+	}
+
+	return nil
 }

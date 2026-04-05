@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 type PresenceDirection string
 
@@ -12,8 +16,11 @@ const (
 type PresenceSource string
 
 const (
-	SourceMock PresenceSource = "mock"
-	SourceCSV  PresenceSource = "csv"
+	SourceMock     PresenceSource = "mock"
+	SourceRFID     PresenceSource = "rfid"
+	SourceTOF      PresenceSource = "tof"
+	SourceDatabase PresenceSource = "database"
+	SourceCSV      PresenceSource = "csv"
 )
 
 type PresenceEvent struct {
@@ -55,6 +62,17 @@ func (e PresenceEvent) Delta() int {
 		return -1
 	default:
 		return 0
+	}
+}
+
+func ParseDirection(value string) (PresenceDirection, error) {
+	switch strings.TrimSpace(value) {
+	case string(DirectionIn):
+		return DirectionIn, nil
+	case string(DirectionOut):
+		return DirectionOut, nil
+	default:
+		return "", fmt.Errorf("direction %q must be one of in,out", value)
 	}
 }
 

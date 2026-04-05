@@ -26,7 +26,24 @@ type healthResponse struct {
 	Adapter string `json:"adapter"`
 }
 
-func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapterName string) http.Handler {
+type Option func(*handlerOptions)
+
+type handlerOptions struct {
+	edgeTapHandler http.Handler
+}
+
+func WithEdgeTapHandler(handler http.Handler) Option {
+	return func(options *handlerOptions) {
+		options.edgeTapHandler = handler
+	}
+}
+
+func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapterName string, opts ...Option) http.Handler {
+	options := handlerOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	router := chi.NewRouter()
 
 	router.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +77,9 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 	})
 
 	router.Handle("/metrics", promhttp.HandlerFor(collector.Registry(), promhttp.HandlerOpts{}))
+	if options.edgeTapHandler != nil {
+		router.Handle("/api/v1/edge/tap", options.edgeTapHandler)
+	}
 
 	return router
 }

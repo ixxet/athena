@@ -15,10 +15,12 @@ import (
 	"github.com/ixxet/athena/internal/adapter"
 	"github.com/ixxet/athena/internal/config"
 	"github.com/ixxet/athena/internal/domain"
+	edgeingress "github.com/ixxet/athena/internal/edge"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 	"github.com/ixxet/athena/internal/publish"
 	"github.com/ixxet/athena/internal/server"
+	"github.com/ixxet/athena/internal/touchnet"
 )
 
 type app struct {
@@ -60,6 +62,7 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newPresenceCmd())
+	rootCmd.AddCommand(newEdgeCmd())
 
 	return rootCmd
 }
@@ -80,9 +83,13 @@ func newServeCmd() *cobra.Command {
 			}
 
 			collector := metrics.New(application.readPath)
-			handler := server.NewHandler(application.readPath, collector, application.adapterName)
+			var (
+				publisher      publish.Publisher
+				closePublisher func() error
+				edgeTapHandler http.Handler
+			)
 			if cfg.NATSURL != "" {
-				publisher, closePublisher, err := newPublisherHandle(cfg)
+				publisher, closePublisher, err = newPublisherHandle(cfg)
 				if err != nil {
 					return err
 				}
@@ -106,6 +113,21 @@ func newServeCmd() *cobra.Command {
 					"interval", cfg.IdentifiedPublishInterval.String(),
 				)
 			}
+
+			if cfg.EdgeHashSalt != "" || len(cfg.EdgeTokens) > 0 {
+				edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens)
+				if err != nil {
+					return err
+				}
+				edgeTapHandler = edgeingress.NewHandler(edgeService)
+				slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens))
+			}
+
+			handlerOpts := make([]server.Option, 0, 1)
+			if edgeTapHandler != nil {
+				handlerOpts = append(handlerOpts, server.WithEdgeTapHandler(edgeTapHandler))
+			}
+			handler := server.NewHandler(application.readPath, collector, application.adapterName, handlerOpts...)
 
 			httpServer := &http.Server{
 				Addr:    cfg.HTTPAddr,
@@ -284,6 +306,107 @@ func newPresenceCmd() *cobra.Command {
 	presenceCmd.AddCommand(departurePublishCmd)
 
 	return presenceCmd
+}
+
+func newEdgeCmd() *cobra.Command {
+	edgeCmd := &cobra.Command{
+		Use:   "edge",
+		Short: "Work with ATHENA edge ingress tools.",
+	}
+
+	var (
+		csvPath       string
+		facilityID    string
+		zoneID        string
+		entryLocation string
+		exitLocation  string
+		baseURL       string
+		nodeID        string
+		token         string
+		timeScale     float64
+		replayFormat  string
+	)
+
+	replayCmd := &cobra.Command{
+		Use:   "replay-touchnet",
+		Short: "Replay a raw TouchNet access report into ATHENA edge ingress.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			file, err := os.Open(csvPath)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			records, err := touchnet.ParseAccessReport(file)
+			if err != nil {
+				return err
+			}
+
+			replayer, err := touchnet.NewReplayer(touchnet.ReplayConfig{
+				FacilityID:    facilityID,
+				ZoneID:        zoneID,
+				EntryLocation: entryLocation,
+				ExitLocation:  exitLocation,
+				BaseURL:       baseURL,
+				NodeID:        nodeID,
+				Token:         token,
+				TimeScale:     timeScale,
+			})
+			if err != nil {
+				return err
+			}
+
+			sent, err := replayer.Replay(cmd.Context(), records)
+			if err != nil {
+				return err
+			}
+
+			switch replayFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(map[string]any{
+					"replayed_count": sent,
+					"csv_path":       csvPath,
+					"facility_id":    facilityID,
+					"node_id":        nodeID,
+					"time_scale":     timeScale,
+				})
+			case "text":
+				_, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"replayed_count=%d csv_path=%s facility_id=%s node_id=%s time_scale=%g\n",
+					sent,
+					csvPath,
+					facilityID,
+					nodeID,
+					timeScale,
+				)
+				return err
+			default:
+				return fmt.Errorf("unsupported format %q", replayFormat)
+			}
+		},
+	}
+
+	replayCmd.Flags().StringVar(&csvPath, "csv-path", "", "path to the raw TouchNet CSV export")
+	replayCmd.Flags().StringVar(&facilityID, "facility", "ashtonbee", "facility id to publish")
+	replayCmd.Flags().StringVar(&zoneID, "zone", "", "optional zone id to publish")
+	replayCmd.Flags().StringVar(&entryLocation, "entry-location", "", "exact LOCATION value that maps to an arrival")
+	replayCmd.Flags().StringVar(&exitLocation, "exit-location", "", "exact LOCATION value that maps to a departure")
+	replayCmd.Flags().StringVar(&baseURL, "base-url", "http://127.0.0.1:8080", "base URL for the ATHENA HTTP server")
+	replayCmd.Flags().StringVar(&nodeID, "node-id", "", "node id to authenticate with edge ingress")
+	replayCmd.Flags().StringVar(&token, "token", "", "edge token for the supplied node id")
+	replayCmd.Flags().Float64Var(&timeScale, "time-scale", 1.0, "replay timing scale; 1.0 preserves source deltas, 0 disables sleeps")
+	replayCmd.Flags().StringVar(&replayFormat, "format", "text", "output format: text or json")
+	_ = replayCmd.MarkFlagRequired("csv-path")
+	_ = replayCmd.MarkFlagRequired("entry-location")
+	_ = replayCmd.MarkFlagRequired("exit-location")
+	_ = replayCmd.MarkFlagRequired("node-id")
+	_ = replayCmd.MarkFlagRequired("token")
+
+	edgeCmd.AddCommand(replayCmd)
+	return edgeCmd
 }
 
 func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {

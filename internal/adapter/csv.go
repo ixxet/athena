@@ -166,7 +166,7 @@ func parseCSVRecord(columns map[string]int, record []string, rowNumber int) (dom
 	}
 
 	directionText := valueAt(record, columns["direction"])
-	direction, err := parseDirection(directionText)
+	direction, err := domain.ParseDirection(directionText)
 	if err != nil {
 		return domain.PresenceEvent{}, fmt.Errorf("row %d: %w", rowNumber, err)
 	}
@@ -191,17 +191,6 @@ func parseCSVRecord(columns map[string]int, record []string, rowNumber int) (dom
 	}
 
 	return event, nil
-}
-
-func parseDirection(value string) (domain.PresenceDirection, error) {
-	switch value {
-	case string(domain.DirectionIn):
-		return domain.DirectionIn, nil
-	case string(domain.DirectionOut):
-		return domain.DirectionOut, nil
-	default:
-		return "", fmt.Errorf("direction %q must be one of in,out", value)
-	}
 }
 
 func normalizeHeader(header []string) map[string]int {

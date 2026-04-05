@@ -113,3 +113,38 @@ func TestMetricsEndpointScrapesCanonicalReadPath(t *testing.T) {
 		t.Fatalf("metrics body = %q, want athena_current_occupancy 2", body)
 	}
 }
+
+func TestEdgeTapRouteMountsWhenConfigured(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(
+			presence.NewService(adapter.NewMockAdapter(adapter.MockConfig{
+				FacilityID: "ashtonbee",
+				Entries:    1,
+				BaseTime:   time.Date(2026, 4, 1, 8, 30, 0, 0, time.UTC),
+			})),
+			domain.OccupancyFilter{FacilityID: "ashtonbee"},
+		),
+		metrics.New(
+			presence.NewReadPath(
+				presence.NewService(adapter.NewMockAdapter(adapter.MockConfig{
+					FacilityID: "ashtonbee",
+					Entries:    1,
+					BaseTime:   time.Date(2026, 4, 1, 8, 30, 0, 0, time.UTC),
+				})),
+				domain.OccupancyFilter{FacilityID: "ashtonbee"},
+			),
+		),
+		"mock",
+		WithEdgeTapHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		})),
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/edge/tap", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
+}

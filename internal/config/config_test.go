@@ -89,3 +89,65 @@ func TestLoadParsesCSVAdapterConfig(t *testing.T) {
 		t.Fatalf("DefaultFacilityID = %q, want source-facility", cfg.DefaultFacilityID)
 	}
 }
+
+func TestLoadRejectsEdgeTokensWithoutHashSalt(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_TOKENS", "entry=node-token")
+	t.Setenv("ATHENA_NATS_URL", "nats://example:4222")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing hash salt error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_HASH_SALT") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_HASH_SALT context", err)
+	}
+}
+
+func TestLoadRejectsEdgeHashSaltWithoutTokens(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing edge tokens error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_TOKENS") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_TOKENS context", err)
+	}
+}
+
+func TestLoadRejectsEdgeIngressWithoutNATS(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
+	t.Setenv("ATHENA_EDGE_TOKENS", "entry=node-token")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing NATS error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_NATS_URL") {
+		t.Fatalf("Load() error = %q, want ATHENA_NATS_URL context", err)
+	}
+}
+
+func TestLoadParsesEdgeTokens(t *testing.T) {
+	t.Setenv("ATHENA_NATS_URL", "nats://example:4222")
+	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
+	t.Setenv("ATHENA_EDGE_TOKENS", "entry = node-token , exit=other-token")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.EdgeHashSalt != "salt" {
+		t.Fatalf("EdgeHashSalt = %q, want salt", cfg.EdgeHashSalt)
+	}
+	if len(cfg.EdgeTokens) != 2 {
+		t.Fatalf("len(EdgeTokens) = %d, want 2", len(cfg.EdgeTokens))
+	}
+	if cfg.EdgeTokens["entry"] != "node-token" {
+		t.Fatalf("EdgeTokens[entry] = %q, want node-token", cfg.EdgeTokens["entry"])
+	}
+	if cfg.EdgeTokens["exit"] != "other-token" {
+		t.Fatalf("EdgeTokens[exit] = %q, want other-token", cfg.EdgeTokens["exit"])
+	}
+}

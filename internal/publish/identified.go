@@ -129,7 +129,7 @@ func BuildDirectionalBatch(events []domain.PresenceEvent, directions ...domain.P
 			continue
 		}
 
-		message, include, err := buildMessage(event)
+		message, include, err := BuildMessage(event)
 		if err != nil {
 			slog.Warn("identified presence rejected", "event_id", event.ID, "direction", event.Direction, "error", err)
 			return nil, fmt.Errorf("build identified presence %q: %w", event.ID, err)
@@ -158,7 +158,7 @@ func PublishBatch(ctx context.Context, publisher Publisher, batch []Message) (in
 	return published, nil
 }
 
-func buildMessage(event domain.PresenceEvent) (Message, bool, error) {
+func BuildMessage(event domain.PresenceEvent) (Message, bool, error) {
 	if strings.TrimSpace(event.ExternalIdentityHash) == "" {
 		slog.Debug("identified presence skipped", "event_id", event.ID, "direction", event.Direction, "reason", "anonymous")
 		return Message{}, false, nil
@@ -262,13 +262,13 @@ func toProtoPresenceSource(source domain.PresenceSource) (athenav1.PresenceSourc
 	switch source {
 	case domain.SourceMock:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_MOCK, nil
-	case domain.PresenceSource("rfid"):
+	case domain.SourceRFID:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_RFID, nil
-	case domain.PresenceSource("tof"):
+	case domain.SourceTOF:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_TOF, nil
-	case domain.PresenceSource("database"):
+	case domain.SourceDatabase:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_DATABASE, nil
-	case domain.PresenceSource("csv"):
+	case domain.SourceCSV:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_CSV, nil
 	default:
 		return athenav1.PresenceSource_PRESENCE_SOURCE_UNSPECIFIED, fmt.Errorf("unsupported presence source %q", source)
