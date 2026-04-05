@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ATHENA TouchNet Edge Fixture</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --ink: #1f1a17;
+      --accent: #9e5f24;
+      --muted: #6c645c;
+      --line: #d7c7b3;
+      --good: #1e7a44;
+      --bad: #8a1c1c;
+    }
+
+    body {
+      margin: 0;
+      font: 16px/1.5 Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top right, rgba(158, 95, 36, 0.18), transparent 24rem),
+        linear-gradient(180deg, #f8f3eb 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    h1, h2 {
+      font-family: "Iowan Old Style", Georgia, serif;
+      margin: 0 0 12px;
+    }
+
+    .layout {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: 320px 1fr;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 16px 32px rgba(81, 56, 29, 0.08);
+      padding: 18px;
+    }
+
+    .controls label {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    input, select, button {
+      font: inherit;
+    }
+
+    input, select {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: var(--accent);
+      color: #fffaf2;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .fixture-shell {
+      overflow: hidden;
+    }
+
+    .touchnet-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .touchnet-header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .status-chip {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(158, 95, 36, 0.12);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 15px;
+    }
+
+    th {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .verify-pass {
+      color: var(--good);
+      font-weight: 700;
+    }
+
+    .verify-fail {
+      color: var(--bad);
+      font-weight: 700;
+    }
+
+    .verify-table-text, .verify-pass, .verify-fail {
+      font-size: 15px;
+    }
+
+    .notes {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 900px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body data-facility-id="ashtonbee" data-zone-id="gym-floor">
+  <main>
+    <h1>ATHENA TouchNet Edge Fixture</h1>
+    <p class="notes">
+      This fixture mirrors the selector shape expected by <code>touchnet-edge.user.js</code>.
+      Use it to exercise row observation, dedupe, rerenders, and focus warnings before the facility reopens.
+    </p>
+
+    <div class="layout">
+      <section class="panel controls">
+        <h2>Fixture Controls</h2>
+        <label>
+          Account number
+          <input id="fixture-account" type="text" value="1000123456" inputmode="numeric">
+        </label>
+        <label>
+          Status
+          <select id="fixture-status">
+            <option value="Pass" selected>Pass</option>
+            <option value="Denied">Denied</option>
+          </select>
+        </label>
+        <label>
+          Timestamp
+          <input id="fixture-timestamp" type="datetime-local" value="2026-04-04T10:00:00">
+        </label>
+        <div class="button-row">
+          <button id="append-row">Append Row</button>
+          <button id="rerender-row" class="secondary" type="button">Rerender Last Row</button>
+          <button id="focus-input" class="secondary" type="button">Focus Input</button>
+          <button id="blur-input" class="secondary" type="button">Blur Input</button>
+        </div>
+        <p class="notes">
+          The userscript only posts rows whose last cell contains <code>.verify-pass</code>. Use the rerender button to confirm that accepted rows are not duplicated.
+        </p>
+      </section>
+
+      <section class="panel fixture-shell">
+        <div class="touchnet-header">
+          <div>
+            <h2>Transaction Entry / Exit Log</h2>
+            <p>Fixture shaped like the saved TouchNet Verify Account Entry page.</p>
+          </div>
+          <span class="status-chip">Fixture</span>
+        </div>
+
+        <label for="verify_account_number">Scan Barcode or Enter Account Number</label>
+        <input id="verify_account_number" type="text" autocomplete="off" placeholder="Reader focus target">
+
+        <table id="verify-account-access-transaction-list">
+          <thead>
+            <tr>
+              <th>Account Picture</th>
+              <th>Account #</th>
+              <th>Type</th>
+              <th>Name</th>
+              <th>Date/Time</th>
+              <th>Status Message</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const tbody = document.querySelector('#verify-account-access-transaction-list > tbody');
+    const accountInput = document.getElementById('verify_account_number');
+
+    function formatTimestamp(raw) {
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) {
+        return '2026/04/04 10:00:00';
+      }
+
+      const year = String(date.getFullYear());
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hour = String(date.getHours()).padStart(2, '0');
+      const minute = String(date.getMinutes()).padStart(2, '0');
+      const second = String(date.getSeconds()).padStart(2, '0');
+      return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+    }
+
+    function createRow(status, account, timestamp) {
+      const row = document.createElement('tr');
+      const isPass = status === 'Pass';
+      const statusMessage = isPass ? 'Access entry granted.' : 'Access denied, no rule matches Account.';
+      row.innerHTML = `
+        <td><img class="verify-acnt-picture img-responsive" alt="Fixture Student - ${formatTimestamp(timestamp)}"></td>
+        <td><span class="verify-table-text">${account}</span></td>
+        <td><span class="verify-table-text">Standard</span></td>
+        <td><span class="verify-table-text">Fixture Student</span></td>
+        <td><span class="verify-table-text">${formatTimestamp(timestamp)}</span></td>
+        <td><span class="verify-table-text">${statusMessage}</span></td>
+        <td>${isPass ? "<span class='verify-pass'>Pass</span>" : "<span class='verify-fail'>Fail</span>"}</td>
+      `;
+      return row;
+    }
+
+    document.getElementById('append-row').addEventListener('click', () => {
+      const account = document.getElementById('fixture-account').value.trim();
+      const status = document.getElementById('fixture-status').value;
+      const timestamp = document.getElementById('fixture-timestamp').value;
+      tbody.prepend(createRow(status, account, timestamp));
+    });
+
+    document.getElementById('rerender-row').addEventListener('click', () => {
+      const lastRow = tbody.querySelector('tr:last-child');
+      if (!lastRow) {
+        return;
+      }
+      const clone = lastRow.cloneNode(true);
+      tbody.removeChild(lastRow);
+      tbody.appendChild(clone);
+    });
+
+    document.getElementById('focus-input').addEventListener('click', () => {
+      accountInput.focus();
+    });
+
+    document.getElementById('blur-input').addEventListener('click', () => {
+      accountInput.blur();
+    });
+
+    accountInput.focus();
+  </script>
+</body>
+</html>

@@ -2,13 +2,15 @@ flowchart LR
   subgraph inputs["Ingress sources"]
     mock["mock adapter<br/>still available"]
     csv["csv adapter<br/>first source-backed line"]
-    future["rfid / database / tof<br/>planned later"]
+    edge["edge tap ingress<br/>rfid browser bridge / replay"]
+    future["database / tof<br/>planned later"]
   end
 
   adapter["adapter layer"]
+  ingress["push ingress handler"]
   read["presence read path<br/>canonical occupancy logic"]
   cli["CLI<br/>athena presence count"]
-  api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count"]
+  api["HTTP<br/>/api/v1/health<br/>/api/v1/presence/count<br/>/api/v1/edge/tap"]
   metrics["Prometheus<br/>athena_current_occupancy"]
   publish["identified-presence publisher"]
   helper["ashton-proto<br/>runtime helper"]
@@ -17,6 +19,7 @@ flowchart LR
 
   mock --> adapter
   csv --> adapter
+  edge --> ingress --> publish
   future -. later .-> adapter
   adapter --> read
   read --> cli
