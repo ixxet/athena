@@ -8,7 +8,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ixxet/athena/internal/domain"
+	edgeingress "github.com/ixxet/athena/internal/edge"
+	"github.com/ixxet/athena/internal/metrics"
+	"github.com/ixxet/athena/internal/presence"
+	"github.com/ixxet/athena/internal/server"
 )
+
+type replayStubPublisher struct {
+	subjects []string
+}
+
+func (s *replayStubPublisher) Publish(_ context.Context, subject string, _ []byte) error {
+	s.subjects = append(s.subjects, subject)
+	return nil
+}
 
 func TestParseAccessReportSkipsMetadataAndParsesRows(t *testing.T) {
 	records, err := ParseAccessReport(strings.NewReader(strings.Join([]string{
@@ -198,5 +213,88 @@ func TestReplayerScalesDelays(t *testing.T) {
 	}
 	if sleeps[0] != 2*time.Minute {
 		t.Fatalf("sleeps[0] = %s, want 2m0s", sleeps[0])
+	}
+}
+
+func TestReplayerDrivesLiveProjectionPath(t *testing.T) {
+	projector := presence.NewProjectorWithClock(func() time.Time {
+		return time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	})
+	readPath := presence.NewReadPath(projector, domain.OccupancyFilter{FacilityID: "ashtonbee"})
+	publisher := &replayStubPublisher{}
+	edgeService, err := edgeingress.NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		edgeingress.WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	handler := server.NewHandler(
+		readPath,
+		metrics.New(readPath),
+		"edge-projection",
+		server.WithEdgeTapHandler(edgeingress.NewHandler(edgeService)),
+	)
+
+	testServer := httptest.NewServer(handler)
+	defer testServer.Close()
+
+	replayer, err := NewReplayer(ReplayConfig{
+		FacilityID:    "ashtonbee",
+		ZoneID:        "gym-floor",
+		EntryLocation: "Entry Reader",
+		ExitLocation:  "Exit Reader",
+		BaseURL:       testServer.URL,
+		NodeID:        "entry-node",
+		Token:         "entry-token",
+		TimeScale:     0,
+	})
+	if err != nil {
+		t.Fatalf("NewReplayer() error = %v", err)
+	}
+
+	sent, err := replayer.Replay(context.Background(), []AccessRecord{
+		{
+			Account:    "1000123456",
+			Location:   "Entry Reader",
+			ObservedAt: time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC),
+			RowNumber:  4,
+		},
+		{
+			Account:    "1000123456",
+			Location:   "Exit Reader",
+			ObservedAt: time.Date(2026, 4, 4, 10, 5, 0, 0, time.UTC),
+			RowNumber:  5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if sent != 2 {
+		t.Fatalf("sent = %d, want 2", sent)
+	}
+
+	response, err := http.Get(testServer.URL + "/api/v1/presence/count?facility=ashtonbee&zone=gym-floor")
+	if err != nil {
+		t.Fatalf("GET presence/count error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("count status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode(count response) error = %v", err)
+	}
+	if currentCount := int(body["current_count"].(float64)); currentCount != 0 {
+		t.Fatalf("current_count = %d, want 0 after replayed in/out", currentCount)
+	}
+	if len(publisher.subjects) != 2 {
+		t.Fatalf("len(subjects) = %d, want 2", len(publisher.subjects))
 	}
 }

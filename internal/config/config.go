@@ -15,6 +15,7 @@ type Config struct {
 	IdentifiedPublishInterval   time.Duration
 	EdgeHashSalt                string
 	EdgeTokens                  map[string]string
+	EdgeOccupancyProjection     bool
 	DefaultFacilityID           string
 	DefaultZoneID               string
 	MockFacilityID              string
@@ -42,6 +43,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	edgeProjection, err := getEnvAsBool("ATHENA_EDGE_OCCUPANCY_PROJECTION", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:                    getEnv("ATHENA_HTTP_ADDR", ":8080"),
 		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
@@ -49,6 +55,7 @@ func Load() (Config, error) {
 		IdentifiedPublishInterval:   interval,
 		EdgeHashSalt:                getEnv("ATHENA_EDGE_HASH_SALT", ""),
 		EdgeTokens:                  parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
+		EdgeOccupancyProjection:     edgeProjection,
 		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
 		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
 		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),
@@ -123,6 +130,20 @@ func getEnvAsDuration(key string, fallback time.Duration) (time.Duration, error)
 	return parsed, nil
 }
 
+func getEnvAsBool(key string, fallback bool) (bool, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", key, value, err)
+	}
+
+	return parsed, nil
+}
+
 func splitCSV(value string) []string {
 	if value == "" {
 		return nil
@@ -165,6 +186,9 @@ func parseNodeTokenMap(value string) map[string]string {
 }
 
 func validateEdgeConfig(cfg Config) error {
+	if cfg.EdgeOccupancyProjection && cfg.EdgeHashSalt == "" && len(cfg.EdgeTokens) == 0 {
+		return fmt.Errorf("ATHENA_EDGE_OCCUPANCY_PROJECTION requires edge ingress to be enabled")
+	}
 	if cfg.EdgeHashSalt == "" && len(cfg.EdgeTokens) == 0 {
 		return nil
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ixxet/athena/internal/domain"
+	"github.com/ixxet/athena/internal/presence"
 	"github.com/ixxet/athena/internal/publish"
 )
 
@@ -62,9 +63,23 @@ type Service struct {
 	publisher publish.Publisher
 	hashSalt  string
 	tokens    map[string]string
+	projector ProjectionApplier
 }
 
-func NewService(publisher publish.Publisher, hashSalt string, tokens map[string]string) (*Service, error) {
+type ProjectionApplier interface {
+	Apply(domain.PresenceEvent) (presence.ProjectionResult, error)
+	ApplyWithEffect(domain.PresenceEvent, func() error) (presence.ProjectionResult, error)
+}
+
+type Option func(*Service)
+
+func WithProjection(projector ProjectionApplier) Option {
+	return func(service *Service) {
+		service.projector = projector
+	}
+}
+
+func NewService(publisher publish.Publisher, hashSalt string, tokens map[string]string, opts ...Option) (*Service, error) {
 	if publisher == nil {
 		return nil, fmt.Errorf("edge publisher is required")
 	}
@@ -80,11 +95,18 @@ func NewService(publisher publish.Publisher, hashSalt string, tokens map[string]
 		copiedTokens[nodeID] = token
 	}
 
-	return &Service{
+	service := &Service{
 		publisher: publisher,
 		hashSalt:  hashSalt,
 		tokens:    copiedTokens,
-	}, nil
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(service)
+		}
+	}
+
+	return service, nil
 }
 
 func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (AcceptedTap, error) {
@@ -97,25 +119,68 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 	}
 
 	if observed.result != "pass" {
-		slog.Info(
-			"edge tap observed",
-			"event_id", observed.event.ID,
-			"node_id", observed.nodeID,
-			"direction", observed.event.Direction,
-			"result", observed.result,
-			"published", false,
-			"account_raw", observed.accountRaw,
-			"account_type", observed.accountType,
-			"name", observed.name,
-			"status_message", observed.statusMessage,
-		)
-
+		s.logObservedTap("edge tap observed", observed, false, "")
 		return AcceptedTap{
 			EventID:   observed.event.ID,
 			Status:    "observed",
 			Result:    observed.result,
 			Direction: string(observed.event.Direction),
 			Published: false,
+		}, nil
+	}
+
+	if s.projector != nil {
+		message, include, err := publish.BuildMessage(observed.event)
+		if err != nil {
+			return AcceptedTap{}, &ValidationError{message: err.Error()}
+		}
+		if !include {
+			return AcceptedTap{}, &ValidationError{message: "identified presence event is missing an external identity hash"}
+		}
+
+		projection, err := s.projector.ApplyWithEffect(observed.event, func() error {
+			if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
+				return fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
+			}
+			return nil
+		})
+		if err != nil {
+			slog.Error(
+				"edge tap projection failed",
+				"event_id", observed.event.ID,
+				"node_id", observed.nodeID,
+				"direction", observed.event.Direction,
+				"result", observed.result,
+				"account_raw", observed.accountRaw,
+				"account_type", observed.accountType,
+				"name", observed.name,
+				"status_message", observed.statusMessage,
+				"error", err,
+			)
+			if errors.Is(err, ErrPublishUnavailable) {
+				return AcceptedTap{}, err
+			}
+			return AcceptedTap{}, fmt.Errorf("apply live occupancy projection: %w", err)
+		}
+		if !projection.Applied {
+			s.logObservedTap("edge tap observed", observed, false, projection.Reason)
+			return AcceptedTap{
+				EventID:   observed.event.ID,
+				Status:    "observed",
+				Result:    observed.result,
+				Direction: string(observed.event.Direction),
+				Published: false,
+			}, nil
+		}
+		s.logAcceptedTap(observed, message.Subject)
+
+		return AcceptedTap{
+			EventID:   observed.event.ID,
+			Subject:   message.Subject,
+			Status:    "accepted",
+			Result:    observed.result,
+			Direction: string(observed.event.Direction),
+			Published: true,
 		}, nil
 	}
 
@@ -143,19 +208,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 		return AcceptedTap{}, fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
 	}
 
-	slog.Info(
-		"edge tap accepted",
-		"event_id", observed.event.ID,
-		"node_id", observed.nodeID,
-		"direction", observed.event.Direction,
-		"result", observed.result,
-		"published", true,
-		"subject", message.Subject,
-		"account_raw", observed.accountRaw,
-		"account_type", observed.accountType,
-		"name", observed.name,
-		"status_message", observed.statusMessage,
-	)
+	s.logAcceptedTap(observed, message.Subject)
 
 	return AcceptedTap{
 		EventID:   observed.event.ID,
@@ -237,6 +290,40 @@ func (s *Service) normalizeRequest(req TapRequest) (observedTap, error) {
 		statusMessage: strings.TrimSpace(req.StatusMessage),
 		nodeID:        nodeID,
 	}, nil
+}
+
+func (s *Service) logObservedTap(message string, observed observedTap, published bool, projectionReason string) {
+	args := []any{
+		"event_id", observed.event.ID,
+		"node_id", observed.nodeID,
+		"direction", observed.event.Direction,
+		"result", observed.result,
+		"published", published,
+		"account_raw", observed.accountRaw,
+		"account_type", observed.accountType,
+		"name", observed.name,
+		"status_message", observed.statusMessage,
+	}
+	if projectionReason != "" {
+		args = append(args, "projection_reason", projectionReason)
+	}
+	slog.Info(message, args...)
+}
+
+func (s *Service) logAcceptedTap(observed observedTap, subject string) {
+	slog.Info(
+		"edge tap accepted",
+		"event_id", observed.event.ID,
+		"node_id", observed.nodeID,
+		"direction", observed.event.Direction,
+		"result", observed.result,
+		"published", true,
+		"subject", subject,
+		"account_raw", observed.accountRaw,
+		"account_type", observed.accountType,
+		"name", observed.name,
+		"status_message", observed.statusMessage,
+	)
 }
 
 func (s *Service) authorize(nodeID, token string) error {

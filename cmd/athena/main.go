@@ -77,64 +77,98 @@ func newServeCmd() *cobra.Command {
 				return err
 			}
 
-			application, err := buildApp(cfg)
-			if err != nil {
-				return err
-			}
-
-			collector := metrics.New(application.readPath)
 			var (
+				readPath       *presence.ReadPath
+				adapterName    string
 				publisher      publish.Publisher
 				closePublisher func() error
 				edgeTapHandler http.Handler
 			)
-			if cfg.NATSURL != "" {
+			if cfg.EdgeOccupancyProjection {
 				publisher, closePublisher, err = newPublisherHandle(cfg)
 				if err != nil {
 					return err
 				}
 				defer closePublisher()
 
-				worker := publish.NewWorker(
-					publish.NewService(application.adapter, publisher),
-					cfg.IdentifiedPublishInterval,
-				)
-				go func() {
-					if err := worker.Run(cmd.Context()); err != nil {
-						slog.Error("identified presence publisher stopped", "error", err)
-					}
-				}()
-				slog.Info(
-					"identified presence publisher enabled",
-					"subjects", []string{
-						protoevents.SubjectIdentifiedPresenceArrived,
-						protoevents.SubjectIdentifiedPresenceDeparted,
-					},
-					"interval", cfg.IdentifiedPublishInterval.String(),
-				)
-			}
+				projector := presence.NewProjector()
+				readPath = presence.NewReadPath(projector, defaultOccupancyFilter(cfg))
+				adapterName = "edge-projection"
 
-			if cfg.EdgeHashSalt != "" || len(cfg.EdgeTokens) > 0 {
-				edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens)
+				edgeService, err := edgeingress.NewService(
+					publisher,
+					cfg.EdgeHashSalt,
+					cfg.EdgeTokens,
+					edgeingress.WithProjection(projector),
+				)
 				if err != nil {
 					return err
 				}
 				edgeTapHandler = edgeingress.NewHandler(edgeService)
-				slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens))
+				slog.Info(
+					"edge occupancy projection enabled",
+					"occupancy_source", "edge-projection",
+					"persistence", "deferred",
+					"node_count", len(cfg.EdgeTokens),
+				)
+			} else {
+				application, err := buildApp(cfg)
+				if err != nil {
+					return err
+				}
+
+				readPath = application.readPath
+				adapterName = application.adapterName
+
+				if cfg.NATSURL != "" {
+					publisher, closePublisher, err = newPublisherHandle(cfg)
+					if err != nil {
+						return err
+					}
+					defer closePublisher()
+
+					worker := publish.NewWorker(
+						publish.NewService(application.adapter, publisher),
+						cfg.IdentifiedPublishInterval,
+					)
+					go func() {
+						if err := worker.Run(cmd.Context()); err != nil {
+							slog.Error("identified presence publisher stopped", "error", err)
+						}
+					}()
+					slog.Info(
+						"identified presence publisher enabled",
+						"subjects", []string{
+							protoevents.SubjectIdentifiedPresenceArrived,
+							protoevents.SubjectIdentifiedPresenceDeparted,
+						},
+						"interval", cfg.IdentifiedPublishInterval.String(),
+					)
+				}
+
+				if cfg.EdgeHashSalt != "" || len(cfg.EdgeTokens) > 0 {
+					edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens)
+					if err != nil {
+						return err
+					}
+					edgeTapHandler = edgeingress.NewHandler(edgeService)
+					slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens))
+				}
 			}
 
+			collector := metrics.New(readPath)
 			handlerOpts := make([]server.Option, 0, 1)
 			if edgeTapHandler != nil {
 				handlerOpts = append(handlerOpts, server.WithEdgeTapHandler(edgeTapHandler))
 			}
-			handler := server.NewHandler(application.readPath, collector, application.adapterName, handlerOpts...)
+			handler := server.NewHandler(readPath, collector, adapterName, handlerOpts...)
 
 			httpServer := &http.Server{
 				Addr:    cfg.HTTPAddr,
 				Handler: handler,
 			}
 
-			slog.Info("starting ATHENA server", "addr", cfg.HTTPAddr, "adapter", cfg.Adapter)
+			slog.Info("starting ATHENA server", "addr", cfg.HTTPAddr, "adapter", adapterName)
 
 			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
@@ -419,10 +453,7 @@ func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
 }
 
 func buildApp(cfg config.Config) (*app, error) {
-	defaultFilter := domain.OccupancyFilter{
-		FacilityID: cfg.DefaultFacilityID,
-		ZoneID:     cfg.DefaultZoneID,
-	}
+	defaultFilter := defaultOccupancyFilter(cfg)
 
 	switch cfg.Adapter {
 	case "mock":
@@ -460,5 +491,12 @@ func buildApp(cfg config.Config) (*app, error) {
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q", cfg.Adapter)
+	}
+}
+
+func defaultOccupancyFilter(cfg config.Config) domain.OccupancyFilter {
+	return domain.OccupancyFilter{
+		FacilityID: cfg.DefaultFacilityID,
+		ZoneID:     cfg.DefaultZoneID,
 	}
 }

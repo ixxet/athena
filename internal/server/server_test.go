@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,9 +10,21 @@ import (
 
 	"github.com/ixxet/athena/internal/adapter"
 	"github.com/ixxet/athena/internal/domain"
+	edgeingress "github.com/ixxet/athena/internal/edge"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 )
+
+type serverStubPublisher struct {
+	subjects []string
+	payloads [][]byte
+}
+
+func (s *serverStubPublisher) Publish(_ context.Context, subject string, payload []byte) error {
+	s.subjects = append(s.subjects, subject)
+	s.payloads = append(s.payloads, payload)
+	return nil
+}
 
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
@@ -146,5 +159,125 @@ func TestEdgeTapRouteMountsWhenConfigured(t *testing.T) {
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
+}
+
+func TestEdgeTapProjectionUpdatesPresenceCount(t *testing.T) {
+	projector := presence.NewProjectorWithClock(func() time.Time {
+		return time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	})
+	readPath := presence.NewReadPath(projector, domain.OccupancyFilter{FacilityID: "ashtonbee"})
+	publisher := &serverStubPublisher{}
+	edgeService, err := edgeingress.NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		edgeingress.WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	handler := NewHandler(
+		readPath,
+		metrics.New(readPath),
+		"edge-projection",
+		WithEdgeTapHandler(edgeingress.NewHandler(edgeService)),
+	)
+
+	tapRequest := httptest.NewRequest(http.MethodPost, "/api/v1/edge/tap", strings.NewReader(`{
+		"event_id":"edge-001",
+		"account_raw":"301536642",
+		"direction":"in",
+		"facility_id":"ashtonbee",
+		"zone_id":"gym-floor",
+		"node_id":"entry-node",
+		"observed_at":"2026-04-05T12:00:00Z",
+		"result":"pass",
+		"account_type":"Standard",
+		"name":"Fixture Student",
+		"status_message":"Access granted to Event."
+	}`))
+	tapRequest.Header.Set("Content-Type", "application/json")
+	tapRequest.Header.Set("X-Ashton-Edge-Token", "entry-token")
+
+	tapRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(tapRecorder, tapRequest)
+	if tapRecorder.Code != http.StatusAccepted {
+		t.Fatalf("tap status = %d, want %d", tapRecorder.Code, http.StatusAccepted)
+	}
+
+	countRequest := httptest.NewRequest(http.MethodGet, "/api/v1/presence/count?facility=ashtonbee&zone=gym-floor", nil)
+	countRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(countRecorder, countRequest)
+	if countRecorder.Code != http.StatusOK {
+		t.Fatalf("count status = %d, want %d", countRecorder.Code, http.StatusOK)
+	}
+	body := countRecorder.Body.String()
+	if !strings.Contains(body, "\"current_count\":1") {
+		t.Fatalf("count body = %q, want current_count 1", body)
+	}
+	if len(publisher.subjects) != 1 {
+		t.Fatalf("len(subjects) = %d, want 1", len(publisher.subjects))
+	}
+}
+
+func TestEdgeTapProjectionKeepsFailObservationOutOfOccupancy(t *testing.T) {
+	projector := presence.NewProjectorWithClock(func() time.Time {
+		return time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	})
+	readPath := presence.NewReadPath(projector, domain.OccupancyFilter{FacilityID: "ashtonbee"})
+	publisher := &serverStubPublisher{}
+	edgeService, err := edgeingress.NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		edgeingress.WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	handler := NewHandler(
+		readPath,
+		metrics.New(readPath),
+		"edge-projection",
+		WithEdgeTapHandler(edgeingress.NewHandler(edgeService)),
+	)
+
+	tapRequest := httptest.NewRequest(http.MethodPost, "/api/v1/edge/tap", strings.NewReader(`{
+		"event_id":"edge-fail-001",
+		"account_raw":"301478835",
+		"direction":"in",
+		"facility_id":"ashtonbee",
+		"zone_id":"gym-floor",
+		"node_id":"entry-node",
+		"observed_at":"2026-04-05T12:01:00Z",
+		"result":"fail",
+		"account_type":"Standard",
+		"name":"Fixture Student",
+		"status_message":"Access denied, no rule matches Account."
+	}`))
+	tapRequest.Header.Set("Content-Type", "application/json")
+	tapRequest.Header.Set("X-Ashton-Edge-Token", "entry-token")
+
+	tapRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(tapRecorder, tapRequest)
+	if tapRecorder.Code != http.StatusAccepted {
+		t.Fatalf("tap status = %d, want %d", tapRecorder.Code, http.StatusAccepted)
+	}
+
+	countRequest := httptest.NewRequest(http.MethodGet, "/api/v1/presence/count?facility=ashtonbee&zone=gym-floor", nil)
+	countRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(countRecorder, countRequest)
+	if countRecorder.Code != http.StatusOK {
+		t.Fatalf("count status = %d, want %d", countRecorder.Code, http.StatusOK)
+	}
+	body := countRecorder.Body.String()
+	if !strings.Contains(body, "\"current_count\":0") {
+		t.Fatalf("count body = %q, want current_count 0", body)
+	}
+	if len(publisher.subjects) != 0 {
+		t.Fatalf("len(subjects) = %d, want 0", len(publisher.subjects))
 	}
 }

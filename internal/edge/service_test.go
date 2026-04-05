@@ -12,6 +12,8 @@ import (
 
 	protoevents "github.com/ixxet/ashton-proto/events"
 	athenav1 "github.com/ixxet/ashton-proto/gen/go/ashton/athena/v1"
+	"github.com/ixxet/athena/internal/domain"
+	"github.com/ixxet/athena/internal/presence"
 )
 
 type stubPublisher struct {
@@ -182,6 +184,182 @@ func TestAcceptTapDuplicatePayloadKeepsStableEventID(t *testing.T) {
 	}
 	if first.ID != second.ID {
 		t.Fatalf("first.ID = %q, second.ID = %q, want same event id", first.ID, second.ID)
+	}
+}
+
+func TestAcceptTapWithProjectionSkipsRepeatedPassIn(t *testing.T) {
+	publisher := &stubPublisher{}
+	projector := presence.NewProjector()
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	first, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-001",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:00:00Z",
+		Result:     "pass",
+	})
+	if err != nil {
+		t.Fatalf("first AcceptTap() error = %v", err)
+	}
+	if !first.Published {
+		t.Fatal("first.Published = false, want true")
+	}
+
+	second, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-002",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:01:00Z",
+		Result:     "pass",
+	})
+	if err != nil {
+		t.Fatalf("second AcceptTap() error = %v", err)
+	}
+	if second.Status != "observed" {
+		t.Fatalf("second.Status = %q, want observed", second.Status)
+	}
+	if second.Published {
+		t.Fatal("second.Published = true, want false")
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(publisher.messages))
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+	})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 1 {
+		t.Fatalf("current_count = %d, want 1", snapshot.CurrentCount)
+	}
+}
+
+func TestAcceptTapWithProjectionPublishesDepartureAfterArrival(t *testing.T) {
+	publisher := &stubPublisher{}
+	projector := presence.NewProjector()
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-in-001",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:00:00Z",
+		Result:     "pass",
+	}); err != nil {
+		t.Fatalf("arrival AcceptTap() error = %v", err)
+	}
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-out-001",
+		AccountRaw: "1000123456",
+		Direction:  "out",
+		FacilityID: "ashtonbee",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:05:00Z",
+		Result:     "pass",
+	})
+	if err != nil {
+		t.Fatalf("departure AcceptTap() error = %v", err)
+	}
+	if !result.Published {
+		t.Fatal("result.Published = false, want true")
+	}
+	if result.Direction != "out" {
+		t.Fatalf("result.Direction = %q, want out", result.Direction)
+	}
+	if len(publisher.messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(publisher.messages))
+	}
+
+	event, err := protoevents.ParseIdentifiedPresenceDeparted(publisher.messages[1].payload)
+	if err != nil {
+		t.Fatalf("ParseIdentifiedPresenceDeparted() error = %v", err)
+	}
+	if event.ID != "edge-out-001" {
+		t.Fatalf("event.ID = %q, want edge-out-001", event.ID)
+	}
+}
+
+func TestAcceptTapWithProjectionDoesNotCommitOnPublishFailure(t *testing.T) {
+	publisher := &stubPublisher{err: errors.New("broker unavailable")}
+	projector := presence.NewProjector()
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:    "edge-001",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:00:00Z",
+		Result:     "pass",
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err == nil {
+		t.Fatal("AcceptTap() error = nil, want publish failure")
+	} else if !errors.Is(err, ErrPublishUnavailable) {
+		t.Fatalf("AcceptTap() error = %v, want ErrPublishUnavailable", err)
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+	})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 0 {
+		t.Fatalf("current_count = %d, want 0 after failed publish", snapshot.CurrentCount)
+	}
+
+	publisher.err = nil
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", req)
+	if err != nil {
+		t.Fatalf("AcceptTap(retry) error = %v", err)
+	}
+	if !result.Published {
+		t.Fatal("result.Published = false, want true")
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(publisher.messages))
 	}
 }
 

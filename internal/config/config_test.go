@@ -41,6 +41,18 @@ func TestLoadRejectsInvalidPublishInterval(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidEdgeOccupancyProjectionFlag(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_OCCUPANCY_PROJECTION", "soon")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid edge occupancy projection error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_OCCUPANCY_PROJECTION") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_OCCUPANCY_PROJECTION context", err)
+	}
+}
+
 func TestLoadParsesMockIdentifiedTagHashes(t *testing.T) {
 	t.Setenv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", " tag-1, ,tag-2 ")
 
@@ -149,5 +161,33 @@ func TestLoadParsesEdgeTokens(t *testing.T) {
 	}
 	if cfg.EdgeTokens["exit"] != "other-token" {
 		t.Fatalf("EdgeTokens[exit] = %q, want other-token", cfg.EdgeTokens["exit"])
+	}
+}
+
+func TestLoadRejectsEdgeProjectionWithoutIngress(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_OCCUPANCY_PROJECTION", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing edge ingress error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_OCCUPANCY_PROJECTION") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_OCCUPANCY_PROJECTION context", err)
+	}
+}
+
+func TestLoadParsesEdgeProjectionConfig(t *testing.T) {
+	t.Setenv("ATHENA_NATS_URL", "nats://example:4222")
+	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
+	t.Setenv("ATHENA_EDGE_TOKENS", "entry=node-token")
+	t.Setenv("ATHENA_EDGE_OCCUPANCY_PROJECTION", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.EdgeOccupancyProjection {
+		t.Fatal("EdgeOccupancyProjection = false, want true")
 	}
 }
