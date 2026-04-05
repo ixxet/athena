@@ -6,12 +6,16 @@ import (
 	"github.com/ixxet/athena/internal/domain"
 )
 
+type OccupancyService interface {
+	CurrentOccupancy(context.Context, domain.OccupancyFilter) (domain.OccupancyState, error)
+}
+
 type ReadPath struct {
-	service       *Service
+	service       OccupancyService
 	defaultFilter domain.OccupancyFilter
 }
 
-func NewReadPath(service *Service, defaultFilter domain.OccupancyFilter) *ReadPath {
+func NewReadPath(service OccupancyService, defaultFilter domain.OccupancyFilter) *ReadPath {
 	return &ReadPath{
 		service:       service,
 		defaultFilter: defaultFilter,
