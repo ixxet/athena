@@ -1,0 +1,41 @@
+flowchart LR
+  subgraph source["TouchNet operator station"]
+    scanner["scanner wedge or manual entry"]
+    page["TouchNet Verify Account Entry page"]
+    row["transaction row inserted<br/>account_raw / account_type / name / status_message / result"]
+    scanner --> page --> row
+  end
+
+  csv["raw TouchNet report CSV"]
+  replay["athena edge replay-touchnet"]
+  script["Tampermonkey userscript<br/>touchnet-edge.user.js"]
+  post["POST /api/v1/edge/tap<br/>X-Ashton-Edge-Token"]
+
+  auth["ATHENA edge ingress<br/>authorize node token"]
+  normalize["normalize request<br/>parse direction + observed_at"]
+  hash["hash account_raw<br/>external_identity_hash"]
+  observe["log full observation<br/>account_raw / account_type / name / status_message / result"]
+  decision{"result == pass?"}
+
+  build["build identified presence event"]
+  nats["NATS<br/>athena.identified_presence.arrived<br/>athena.identified_presence.departed"]
+  apollo["APOLLO<br/>visit open / close handling"]
+
+  noPublish["no lifecycle publish<br/>observation only"]
+  response["HTTP response back to sender<br/>accepted or observed"]
+
+  futureStore["future append-only<br/>edge observation storage"]
+  futureOps["future HERMES admin flows<br/>search / audit / override"]
+
+  row --> script --> post
+  csv --> replay --> post
+
+  post --> auth --> normalize --> hash --> observe --> decision
+
+  decision -- "pass" --> build --> nats --> apollo
+  decision -- "fail" --> noPublish
+
+  build --> response
+  noPublish --> response
+
+  observe -. "future persistence" .-> futureStore -. "future admin reads and overrides" .-> futureOps
