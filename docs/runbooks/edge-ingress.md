@@ -145,6 +145,38 @@ Admin-facing note:
 - `go test -count=5 ./internal/config ./internal/edge ./internal/touchnet`
 - `go test -count=5 ./internal/presence ./internal/publish ./internal/server ./cmd/athena`
 
+## Hardening-Proven Behaviors
+
+The destructive hardening pass for this slice locally verified:
+
+- first `in` updates projection and publishes `athena.identified_presence.arrived`
+- repeated `in` stays observation-only and does not inflate occupancy
+- `out` after `in` updates projection and publishes
+  `athena.identified_presence.departed`
+- repeated `out` stays observation-only and does not push occupancy below zero
+- stale pass events stay observation-only
+- `fail` taps stay observation-only and do not mutate occupancy
+- facility and zone aggregates remain isolated
+- replay through `athena edge replay-touchnet` drives the same `/api/v1/edge/tap`
+  projection path
+- emitted identified payloads contain the hashed identity only, not the raw
+  account value
+- publish failure returns `503` and does not commit the in-memory projection
+
+Use the hardening smoke sequence below when you need a closure-level recheck:
+
+1. Start a local NATS server.
+2. Start `athena serve` with `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`.
+3. Post one accepted `in` tap to `/api/v1/edge/tap`.
+4. Verify `/api/v1/presence/count` and `/metrics`.
+5. Post repeated `in`, accepted `out`, repeated `out`, `fail`, and stale taps.
+6. Verify counts stay deterministic.
+7. Replay a one-row TouchNet CSV through `athena edge replay-touchnet`.
+8. Verify the replayed zone count and emitted subject.
+9. Stop NATS and post one accepted `pass` tap.
+10. Verify the HTTP response is `503` and the target zone count remains
+    unchanged.
+
 ## Boundaries
 
 - `/api/v1/presence/count` reads from the in-memory edge projection only when

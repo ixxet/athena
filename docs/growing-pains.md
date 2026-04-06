@@ -141,3 +141,14 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   transition.
   Rule: the live edge path must be deterministic under duplicate, conflicting,
   and out-of-order taps before it can be treated as occupancy truth.
+
+- Symptom: a broker failure during an accepted `pass` tap could have committed
+  projection state before the identified publish actually succeeded.
+  Cause: the first projection draft treated publish and projection as separate
+  side effects, which would have made retry behavior incorrect under a NATS
+  outage.
+  Fix: move the publish side effect into the projector commit path so
+  projection only commits after publish succeeds, and verify the broker-down
+  path returns `503` without mutating occupancy.
+  Rule: when one normalized event drives both live occupancy and downstream
+  publish, the commit point must preserve retry safety under partial failure.
