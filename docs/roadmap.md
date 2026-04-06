@@ -23,7 +23,8 @@ Current active line: `v0.4.x`
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.4.1` | bounded deployment follow-through for live edge-driven occupancy or departure-close support | only widen deployed truth as far as the bounded workstream proves | do not imply broad ATHENA ingress rollout or broader APOLLO product deployment |
+| `v0.4.1` | edge-driven occupancy projection slice | keep projection explicit, in-memory, and driven by the same normalized edge stream as identified publish | do not imply persistence or deployment widening |
+| `v0.4.2` | bounded deployment follow-through for live edge-driven occupancy or departure-close support | only widen deployed truth as far as the bounded workstream proves | do not imply broad ATHENA ingress rollout or broader APOLLO product deployment |
 | `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
 | `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
 
