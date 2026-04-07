@@ -175,3 +175,47 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   `/api/v1/edge/tap` and `/api/v1/health` through the quick tunnel.
   Rule: when proving browser reachability for an ingress boundary, expose the
   minimum public surface that proves the slice and nothing broader.
+
+## 2026-04-07
+
+- Symptom: newly added workstation node tokens existed in the Kubernetes
+  `athena-edge-runtime` secret, but live ATHENA still rejected them as
+  `forbidden edge token`.
+  Cause: the deployment reads `ATHENA_EDGE_TOKENS` through `secretKeyRef` env,
+  so updating the secret did not hot-reload the running pod.
+  Fix: restart the ATHENA deployment after the secret change so the pod reloads
+  the new node map.
+  Rule: secret-backed env changes are not live until the runtime that reads
+  them is restarted or otherwise rolled.
+
+- Symptom: the Chromebook workstation could show the page and legacy
+  Tampermonkey script, but it was initially unclear whether the failure lived in
+  ATHENA, the token map, or the browser runtime.
+  Cause: the modern workstation script used newer browser features such as
+  `async/await`, `crypto.subtle`, and `TextEncoder`, which are not ideal
+  assumptions for older extension/runtime paths.
+  Fix: keep a compatibility-targeted workstation script variant for legacy
+  ChromeOS environments and validate it from the browser console before
+  assuming server-side failure.
+  Rule: real workstation fleets may need compatibility-targeted ingress bridges;
+  node-level attribution and console-level proof matter before blaming the
+  ingestion service.
+
+- Symptom: operator interpretation drifted toward treating a workstation as an
+  "entry node" or "exit node", even though TouchNet already states the true row
+  outcome.
+  Cause: physical reader placement and workflow habits can change faster than
+  node naming, and a machine may process both entry and exit attempts.
+  Fix: keep `node_id` as workstation identity only, and infer `direction` from
+  the TouchNet status text.
+  Rule: node names should support audit and debugging, but ATHENA should read
+  direction from source truth whenever the source already expresses it.
+
+- Symptom: local operators read `22:xx` in logs while standing in Toronto at
+  `18:xx`, which looked like wrong event timing.
+  Cause: ATHENA normalizes canonical event timestamps to UTC, and the initial
+  runtime log display also rendered in UTC.
+  Fix: set the deployment runtime timezone to `America/Toronto` for operator log
+  readability while keeping canonical event timestamps normalized in UTC.
+  Rule: separate human-readable runtime log timezone from canonical stored or
+  published event time.

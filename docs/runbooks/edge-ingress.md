@@ -130,6 +130,42 @@ What was proven against that live deployment:
 - identified publish still moves on NATS from the same accepted pass stream
 - raw TouchNet replay can hit that same live `/api/v1/edge/tap` route
 
+## Live Workstation Proof
+
+The first bounded multi-workstation proof now includes:
+
+- truthful facility and zone routing for Morningside:
+  - `facility_id=morningside`
+  - `zone_id=weight-room`
+- workstation-neutral node IDs:
+  - `ms-gym-01`
+  - `ms-gym-02`
+- direction inferred from the TouchNet row itself, not from the workstation
+  name
+
+Observed live behaviors from workstation testing:
+
+- `ms-gym-01` and `ms-gym-02` can both emit real accepted and denied attempts
+- accepted `in` and `out` rows publish the corresponding identified lifecycle
+  subjects
+- malformed accounts, wrong account-type attempts, and denied accounts stay
+  observation-only
+- repeated `out` rows produce `already_absent`
+- repeated `in` rows produce `already_present`
+
+Operational note:
+
+- if `ATHENA_EDGE_TOKENS` changes through the live secret, restart the ATHENA
+  deployment so the pod reloads the new node map
+
+Compatibility note:
+
+- the Chromebook workstation required a legacy-safe userscript variant because
+  older Tampermonkey/runtime paths are more fragile than current Chrome on
+  Windows
+- keep workstation-specific live scripts local-only when they contain active
+  node tokens; do not commit those token-bearing variants into the public repo
+
 ## Observed Fields
 
 The edge bridge now forwards the full TouchNet row context into ATHENA for
@@ -161,6 +197,13 @@ Admin-facing note:
 - if `Hermes` is the intended admin-facing surface, it is a reasonable place to
   add those operator endpoints later while ATHENA remains the ingestion and
   normalization boundary
+
+## Time Interpretation
+
+- canonical event timestamps stay normalized in UTC
+- runtime pod logs may be rendered in local Toronto time for operator clarity
+- do not treat a local log timezone change as a change to stored or published
+  event time semantics
 
 ## Required Checks
 
