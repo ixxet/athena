@@ -107,6 +107,29 @@ For the real TouchNet page:
 The userscript posts through Tampermonkey's cross-origin request API, so it is
 better suited to a real browser test than plain in-page `fetch()`.
 
+## Bounded Live Deployment Proof
+
+`v0.4.1` is now bounded live deployment truth, not only local tracer truth.
+
+What is live:
+
+- ATHENA runs in-cluster with `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
+- the cluster pulls the private ATHENA image through a dedicated GHCR image pull
+  secret
+- a narrow HTTPS path is exposed through a Cloudflare quick tunnel
+- the public path is intentionally restricted to:
+  - `POST /api/v1/edge/tap`
+  - `GET /api/v1/health`
+
+What was proven against that live deployment:
+
+- browser-reachable HTTPS health returns `adapter=edge-projection`
+- accepted `pass` taps update live occupancy
+- repeated `in`, repeated `out`, `fail`, and stale rows stay deterministic
+- `/metrics` reflects the same occupancy state
+- identified publish still moves on NATS from the same accepted pass stream
+- raw TouchNet replay can hit that same live `/api/v1/edge/tap` route
+
 ## Observed Fields
 
 The edge bridge now forwards the full TouchNet row context into ATHENA for
@@ -184,5 +207,6 @@ Use the hardening smoke sequence below when you need a closure-level recheck:
   outside that mode
 - no ATHENA persistence is activated in this slice
 - APOLLO consumers remain unchanged
-- deployment truth is unchanged; this runbook proves the local tracer slice only
+- bounded live deployment truth is now proven for one facility and one node
+  token, but broad ingress rollout and persistence are still deferred
 - the userscript is intentionally DOM-based and does not capture raw keystrokes

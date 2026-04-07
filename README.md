@@ -6,9 +6,10 @@ publication path that other repos depend on.
 
 > Current real slice: mock-backed and CSV-backed presence input for the
 > canonical occupancy read path, push-based edge tap ingress for identified
-> visit lifecycle publication, optional in-memory edge-driven occupancy
-> projection for `serve`, and shared `ashton-proto` runtime contracts for
-> arrival and departure events.
+> visit lifecycle publication, explicit in-memory edge-driven occupancy
+> projection for `serve`, bounded live browser-reachable deployment of that
+> edge path, and shared `ashton-proto` runtime contracts for arrival and
+> departure events.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
@@ -93,7 +94,7 @@ flowchart LR
 | Shared contract | `ashton-proto` generated types + runtime helper | Instituted | `v0.1.x` -> `v0.3.x` | Publishes bytes from the shared contract path |
 | Adapter model | Mock adapter | Instituted | `v0.1.x` -> `v0.4.x` | Deterministic fixtures remain available for tests and bounded smoke |
 | Real ingress adapter | CSV presence-event adapter plus push-based edge ingress | Real | `v0.4.x` | CSV remains replay/import truth; edge ingress is the live source when explicit projection mode is enabled |
-| Live occupancy projection | In-memory identity and aggregate projection | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy without widening persistence or deployment truth |
+| Live occupancy projection | In-memory identity and aggregate projection | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
 | Database schema | PostgreSQL migration files | Authored, not active in runtime | `v0.5.0` | The current executable slice does not yet query Postgres |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
@@ -188,19 +189,25 @@ hashing, and normalization boundary.
   shared `ashton-proto` helper code
 - local manual smoke has already been used to exercise both one-shot publish and
   worker-driven publish against real NATS
-- the bounded live cluster deployment now proves the identified arrival path can
-  publish from ATHENA through in-cluster NATS and into APOLLO visit history
+- the bounded live deployment now proves browser-reachable HTTPS edge ingress,
+  in-memory occupancy updates, Prometheus count updates, direct NATS subject
+  movement, and raw TouchNet replay through the same live `/api/v1/edge/tap`
+  path
 
 ### Real but intentionally narrow
 
 - the CSV adapter is local-runtime proof only and does not widen the existing
   live deployment claim
-- live edge-driven occupancy is explicit serve-mode behavior only; it does not activate append-only persistence or widen the current deployment claim
+- live edge-driven occupancy is explicit serve-mode behavior only; it does not
+  activate append-only persistence or widen the current deployment claim beyond
+  one bounded facility and node rollout
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
   the only cross-repo slice that is real today
-- the live cluster proof still uses the mock adapter and one known claimed tag;
-  it does not widen ATHENA into a broader ingress rollout
+- the live browser path is still a narrow Cloudflare quick tunnel in front of a
+  proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
+- the live cluster proof still uses one bounded node token and one facility
+  rollout; it does not widen ATHENA into a broad ingress rollout
 
 ### Authored but not yet active
 
@@ -233,14 +240,13 @@ bullets are only the short summary.
 | `v0.1.x` | `v0.1.0` | Shipped | first mock-backed occupancy read line | lifecycle publish and source-backed ingress |
 | `v0.2.x` | `v0.2.0`, `v0.2.1` | Shipped | read-path hardening and live read deployment line | lifecycle publish and real ingress adapters |
 | `v0.3.x` | `v0.3.0`, `v0.3.1` | Shipped | lifecycle publish line plus bounded live arrival proof through Milestone 1.5 | source-backed ingress rollout, persistence, and prediction |
+| `v0.4.x` | `v0.4.0`, `v0.4.1` | Shipped | first source-backed ingress adapter, edge-driven occupancy projection, and bounded live edge deployment proof | append-only persistence, broad ingress rollout, and prediction |
 
 ## Planned Release Lines
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.4.0` | first real ingress adapter for Tracer 10 | keep one source-backed adapter narrow and inspectable | do not widen into persistence or prediction work in the same line |
-| `v0.4.1` | edge-driven occupancy projection slice | keep projection explicit, in-memory, and driven by the same normalized edge stream as identified publish | do not imply persistence or deployment widening |
-| `v0.4.2` | source-backed deployment or live departure-close support line | only widen deployed truth as far as the bounded workstream proves | do not imply broad ATHENA ingress rollout or broader APOLLO product deployment |
+| `v0.4.2` | broader live ingress hardening or durable edge-observation groundwork | only widen deployed truth as far as the bounded workstream proves | do not imply append-only persistence or broad ATHENA ingress rollout |
 | `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
 | `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
 

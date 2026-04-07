@@ -152,3 +152,26 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   path returns `503` without mutating occupancy.
   Rule: when one normalized event drives both live occupancy and downstream
   publish, the commit point must preserve retry safety under partial failure.
+
+## 2026-04-06
+
+- Symptom: the first deployment follow-through stalled even though
+  `athena v0.4.1` was already built and tagged.
+  Cause: repo/runtime truth and deployable artifact truth were separate; the
+  cluster was still pinned to `0.4.0`, the local GHCR credential had lost
+  package scopes, and Kubernetes had no image pull credential for private
+  GHCR access.
+  Fix: restore package-capable local publish auth, publish the exact `v0.4.1`
+  image digest, and wire a dedicated cluster-only GHCR pull secret through a
+  ServiceAccount `imagePullSecrets` path in GitOps.
+  Rule: a release tag is not deployment truth until the artifact is actually
+  pullable by the cluster runtime that will use it.
+
+- Symptom: the first browser-reachable ATHENA ingress idea would have widened
+  the public surface too far by exposing the whole service externally.
+  Cause: the raw `athena` service already serves health, occupancy, metrics, and
+  ingress, but the browser/Tampermonkey requirement only needed the tap path.
+  Fix: place a narrow proxy in front of ATHENA and expose only
+  `/api/v1/edge/tap` and `/api/v1/health` through the quick tunnel.
+  Rule: when proving browser reachability for an ingress boundary, expose the
+  minimum public surface that proves the slice and nothing broader.
