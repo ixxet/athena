@@ -1,0 +1,22 @@
+flowchart LR
+  tap["TouchNet row<br/>pass / fail<br/>name / account type / status"]
+  ingress["ATHENA edge ingress<br/>normalize + hash + authorize"]
+  observations["Append-only edge observations<br/>durable ATHENA-owned history"]
+  projection["In-memory live projection<br/>current serve-mode truth"]
+  publish["Identified publish<br/>hash-only downstream events"]
+  sessions["Derived sessions<br/>entry/exit pairing<br/>duration inference"]
+  analytics["Operational analytics<br/>flow / frequency / quality / dwell"]
+  alias["Explicit alias mapping<br/>student / RFID / confirmed links"]
+  ops["Future operator surfaces<br/>search / reconciliation / override"]
+
+  tap --> ingress
+  ingress --> observations
+  ingress --> projection
+  ingress --> publish
+  observations --> sessions
+  observations --> analytics
+  observations --> alias
+  sessions --> analytics
+  alias --> analytics
+  alias -. later .-> ops
+  observations -. later .-> ops

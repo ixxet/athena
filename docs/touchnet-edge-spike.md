@@ -19,6 +19,10 @@ Account Entry page shape:
 
 `TouchNet page -> Tampermonkey userscript -> POST /api/v1/edge/tap -> ATHENA -> NATS -> APOLLO`
 
+The bounded live deployment workstream later proved the same path through a
+real browser-reachable HTTPS ATHENA ingress, including workstation-specific
+node IDs and a legacy-safe Chromebook variant for one workstation.
+
 What ATHENA now receives from the browser bridge:
 
 - `account_raw`
@@ -82,6 +86,10 @@ The current spike handles that carefully:
 
 That is enough to reconcile student number and RFID later, but it is not yet a
 true identity-linking system.
+
+The planning follow-through for durable observation history, inferred session
+duration, and explicit alias mapping now lives in
+[`docs/edge-observation-history-plan.md`](docs/edge-observation-history-plan.md).
 
 To move from "observable" to "reconciled", the platform would need an explicit
 mapping layer, for example:
