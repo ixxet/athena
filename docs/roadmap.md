@@ -28,6 +28,14 @@ Current active line: `v0.4.x`
 | `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
 | `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
 
+## Next Ladder Role
+
+| Line | Role | Why it matters |
+| --- | --- | --- |
+| `Tracer 16` | durable edge-observation groundwork and ingress hardening | reduces all-memory dependence while keeping the bounded live edge path narrow |
+| `v0.5.0` | persistence and broader diagnostics | turns the bounded live edge path into durable operational history |
+| `v0.6.0` | capacity prediction runtime | keeps prediction later than trusted ingress and durable history |
+
 ## Boundaries
 
 - Tracer 9 does not require ATHENA widening by default
