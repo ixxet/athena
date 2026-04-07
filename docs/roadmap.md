@@ -24,7 +24,7 @@ Current active line: `v0.4.x`
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.4.2` | broader ingress hardening or durable edge-observation groundwork | only widen deployed truth as far as the bounded workstream proves | do not imply append-only persistence or broad ATHENA ingress rollout |
+| `v0.4.2` | durable edge-observation groundwork, session analytics planning, and ingress hardening | only widen deployed truth as far as the bounded workstream proves | do not imply broad ingress rollout, override workflows, or a finished persistence story before append-only history is actually active |
 | `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
 | `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
 
@@ -32,7 +32,7 @@ Current active line: `v0.4.x`
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
-| `Tracer 16` | durable edge-observation groundwork and ingress hardening | reduces all-memory dependence while keeping the bounded live edge path narrow |
+| `Tracer 16` | durable edge-observation groundwork, session inference, and ingress hardening | reduces all-memory dependence, turns tap history into queryable operational truth, and sets up dwell and flow analytics without widening product logic |
 | `v0.5.0` | persistence and broader diagnostics | turns the bounded live edge path into durable operational history |
 | `v0.6.0` | capacity prediction runtime | keeps prediction later than trusted ingress and durable history |
 
@@ -49,6 +49,9 @@ Current active line: `v0.4.x`
 - observed TouchNet pass/fail history is a plausible next ATHENA persistence
   slice, but operator override workflows should remain separate from the
   physical-truth ingest boundary
+- duration-of-stay, tap frequency, and workstation-quality metrics should be
+  derived from durable append-only observation history, not from ad hoc log
+  scraping
 - keep physical truth separate from member intent and product logic
 - do not activate Redis-backed hot counters before the basic read path needs them
 - do not widen into predictive dashboards before prediction is real

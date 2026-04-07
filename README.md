@@ -20,7 +20,7 @@ prediction, and storage plans clearly marked as future work.
 | Reader | Start With | Why |
 | --- | --- | --- |
 | Recruiter or interviewer | [`Runtime Surfaces`](#runtime-surfaces), [`Current State Block`](#current-state-block), [`Why ATHENA Matters`](#why-athena-matters) | These sections show the real service boundary quickly |
-| Engineer | [`Architecture`](#architecture), [`Technology Stack`](#technology-stack), [`Known Caveats`](#known-caveats) | These sections show how the service works and where it is still incomplete |
+| Engineer | [`Architecture`](#architecture), [`Technology Stack`](#technology-stack), [`docs/edge-observation-history-plan.md`](docs/edge-observation-history-plan.md), [`Known Caveats`](#known-caveats) | These sections show how the service works, how edge truth is planned to persist, and where it is still incomplete |
 | Operator | [`docs/runbooks/mock-slice.md`](docs/runbooks/mock-slice.md), [`docs/runbooks/source-backed-ingress.md`](docs/runbooks/source-backed-ingress.md), [`docs/runbooks/edge-ingress.md`](docs/runbooks/edge-ingress.md) | These runbooks cover the narrow paths that are actually proven |
 
 ## Architecture
@@ -161,6 +161,9 @@ If `Hermes` is the intended admin-facing service, it is a reasonable future
 surface for those reconciliation endpoints, with ATHENA remaining the ingest,
 hashing, and normalization boundary.
 
+The planning doc for durable history, session inference, and alias handling now
+lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history-plan.md).
+
 ## Known Caveats
 
 | Area | Current caveat | Why it matters |
@@ -204,6 +207,8 @@ hashing, and normalization boundary.
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
   the only cross-repo slice that is real today
+- observed edge history is still log-backed and in-memory only; the durable
+  append-only plan is documented but not active yet
 - the live browser path is still a narrow Cloudflare quick tunnel in front of a
   proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
 - the live cluster proof still uses one bounded node token and one facility
@@ -223,6 +228,8 @@ bullets are only the short summary.
 
 - additional real ingress adapters beyond the first CSV line
 - broader metrics and diagnostics
+- append-only edge observation history plus first inferred visit-duration
+  analytics
 - a Postgres-backed read/write path once the tracer requires persistence
 - capacity prediction once the read path and event history justify it
 
