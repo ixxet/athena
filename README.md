@@ -99,7 +99,8 @@ flowchart LR
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
 | Redis utility layer | Redis | Deferred | later than `v0.5.0` | Useful later for hot counters and short-lived aggregates |
-| Prediction engine | EWMA + historical binning | Deferred | `v0.6.0` | ADR-preserved design, not runtime truth yet |
+| Facility metadata surfaces | facility catalog, hours, zones, closure windows, and per-facility metadata reads | Planned | `v0.6.0` | Comes before prediction so later sports/session logic can build on trustworthy facility truth |
+| Prediction engine | EWMA + historical binning | Deferred | later than `v0.6.0` | ADR-preserved design, not runtime truth yet |
 
 ## Data Ownership And Boundaries
 
@@ -258,14 +259,16 @@ bullets are only the short summary.
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
 | `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before the bounded slice is actually real |
-| `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress and trusted durable history first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
+| later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
 | `v0.5.0` / `Tracer 16` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence while keeping the live edge slice narrow and trustworthy |
-| `v0.6.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, and diagnostics are stable |
+| `v0.6.0` / `Tracer 18` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
+| later than `v0.6.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, diagnostics, and facility truth are stable |
 
 ## Project Structure
 

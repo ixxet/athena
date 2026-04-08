@@ -25,14 +25,16 @@ Current active line: `v0.4.x`
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
 | `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before append-only history is actually active |
-| `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress and trusted durable history first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
+| later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
 | `Tracer 16` / `v0.5.0` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence, turns tap history into queryable operational truth, and sets up dwell and flow analytics without widening product logic |
-| `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress and durable history |
+| `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
+| later than `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, and facility truth |
 
 ## Boundaries
 
@@ -67,4 +69,5 @@ Current active line: `v0.4.x`
 - that bounded deployment workstream is real deployment truth, but it did not
   consume a tracer number and should not be treated as partial `Tracer 16`
 - `Milestone 1.6`: live departure-close proof in-cluster
-- later line: persistence and prediction after source-backed ingress is stable
+- `Tracer 18`: facility metadata and hours after durable history is stable
+- later line: broader diagnostics and prediction after source-backed ingress and facility truth are stable
