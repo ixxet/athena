@@ -13,6 +13,12 @@ In explicit edge-projection mode, the same normalized pass event now drives:
 
 Persistence is still deferred in this slice.
 
+For chat handoff artifacts:
+
+- use `docs/touchnet-edge-handoff-prompt.md` for the older narrow spike prompt
+- use `docs/athena-adapter-drift-handoff-pack.md` for the broader adapter plus
+  live deployment workstream closeout
+
 ## Environment
 
 Start ATHENA with NATS plus edge-ingress config:
