@@ -168,7 +168,8 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 
 | Area | Current caveat | Why it matters |
 | --- | --- | --- |
-| Container startup | The Docker image entrypoint launches the binary without `serve`, so the default container command does not start the HTTP service yet | Deployment docs must treat the image as requiring an explicit service command until that is fixed |
+| Container CLI mode | The Docker image now defaults to `athena serve`, so CLI-only container use must override the command explicitly | Default runtime behavior now matches HTTP-service deployments instead of printing help and exiting |
+| Edge ingress logs | Routine edge logs now redact raw account values and resolved names, but the operator trail is still log-backed rather than durable | Current live diagnostics are safer than before, but they are not a substitute for append-only history |
 | Persistence | Postgres schema exists, but the active runtime still keeps live edge occupancy in memory only | Readers should not assume append-only observation storage or snapshot persistence are active |
 | Publish dedupe | Republish protection is process-local | Restart safety currently depends on downstream idempotency more than ATHENA memory |
 | Projection mode | Edge-driven occupancy requires an explicit `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config | This tracer changes the occupancy source intentionally, not by config accident |
@@ -213,6 +214,9 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
   proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
 - the live cluster proof still uses one bounded node token and one facility
   rollout; it does not widen ATHENA into a broad ingress rollout
+- the bounded live edge deployment workstream is real deployment truth on
+  `v0.4.1`, but it did not consume a tracer number and does not partially close
+  `Tracer 16`
 
 ### Authored but not yet active
 
@@ -253,17 +257,15 @@ bullets are only the short summary.
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.4.2` | broader live ingress hardening or durable edge-observation groundwork | only widen deployed truth as far as the bounded workstream proves | do not imply append-only persistence or broad ATHENA ingress rollout |
-| `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
-| `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before the bounded slice is actually real |
+| `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress and trusted durable history first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
-| `v0.4.2` / `Tracer 16` | durable edge-observation groundwork and ingress hardening | reduces all-memory dependence while keeping the live edge slice narrow and trustworthy |
-| `v0.5.0` | persistence and broader diagnostics | turns the bounded live edge path into durable operational history instead of restart-fragile runtime state |
-| `v0.6.0` | capacity prediction runtime | earns prediction only after ingress, history, and diagnostics are stable |
+| `v0.5.0` / `Tracer 16` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence while keeping the live edge slice narrow and trustworthy |
+| `v0.6.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, and diagnostics are stable |
 
 ## Project Structure
 

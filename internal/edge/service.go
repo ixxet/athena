@@ -145,18 +145,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 			return nil
 		})
 		if err != nil {
-			slog.Error(
-				"edge tap projection failed",
-				"event_id", observed.event.ID,
-				"node_id", observed.nodeID,
-				"direction", observed.event.Direction,
-				"result", observed.result,
-				"account_raw", observed.accountRaw,
-				"account_type", observed.accountType,
-				"name", observed.name,
-				"status_message", observed.statusMessage,
-				"error", err,
-			)
+			slog.Error("edge tap projection failed", append(s.logFields(observed), "error", err)...)
 			if errors.Is(err, ErrPublishUnavailable) {
 				return AcceptedTap{}, err
 			}
@@ -193,18 +182,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 	}
 
 	if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
-		slog.Error(
-			"edge tap publish failed",
-			"event_id", observed.event.ID,
-			"node_id", observed.nodeID,
-			"direction", observed.event.Direction,
-			"result", observed.result,
-			"account_raw", observed.accountRaw,
-			"account_type", observed.accountType,
-			"name", observed.name,
-			"status_message", observed.statusMessage,
-			"error", err,
-		)
+		slog.Error("edge tap publish failed", append(s.logFields(observed), "error", err)...)
 		return AcceptedTap{}, fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
 	}
 
@@ -293,17 +271,7 @@ func (s *Service) normalizeRequest(req TapRequest) (observedTap, error) {
 }
 
 func (s *Service) logObservedTap(message string, observed observedTap, published bool, projectionReason string) {
-	args := []any{
-		"event_id", observed.event.ID,
-		"node_id", observed.nodeID,
-		"direction", observed.event.Direction,
-		"result", observed.result,
-		"published", published,
-		"account_raw", observed.accountRaw,
-		"account_type", observed.accountType,
-		"name", observed.name,
-		"status_message", observed.statusMessage,
-	}
+	args := append(s.logFields(observed), "published", published)
 	if projectionReason != "" {
 		args = append(args, "projection_reason", projectionReason)
 	}
@@ -311,19 +279,20 @@ func (s *Service) logObservedTap(message string, observed observedTap, published
 }
 
 func (s *Service) logAcceptedTap(observed observedTap, subject string) {
-	slog.Info(
-		"edge tap accepted",
+	slog.Info("edge tap accepted", append(s.logFields(observed), "published", true, "subject", subject)...)
+}
+
+func (s *Service) logFields(observed observedTap) []any {
+	return []any{
 		"event_id", observed.event.ID,
 		"node_id", observed.nodeID,
 		"direction", observed.event.Direction,
 		"result", observed.result,
-		"published", true,
-		"subject", subject,
-		"account_raw", observed.accountRaw,
+		"external_identity_hash", observed.event.ExternalIdentityHash,
 		"account_type", observed.accountType,
-		"name", observed.name,
+		"name_present", observed.name != "",
 		"status_message", observed.statusMessage,
-	)
+	}
 }
 
 func (s *Service) authorize(nodeID, token string) error {

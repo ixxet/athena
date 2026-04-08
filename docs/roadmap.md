@@ -24,17 +24,15 @@ Current active line: `v0.4.x`
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.4.2` | durable edge-observation groundwork, session analytics planning, and ingress hardening | only widen deployed truth as far as the bounded workstream proves | do not imply broad ingress rollout, override workflows, or a finished persistence story before append-only history is actually active |
-| `v0.5.0` | persistence and broader diagnostics | activate Postgres-backed state only when a tracer needs it | do not mix storage activation with prediction rollout |
-| `v0.6.0` | capacity prediction runtime | build on stable ingress and event history first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before append-only history is actually active |
+| `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress and trusted durable history first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
-| `Tracer 16` | durable edge-observation groundwork, session inference, and ingress hardening | reduces all-memory dependence, turns tap history into queryable operational truth, and sets up dwell and flow analytics without widening product logic |
-| `v0.5.0` | persistence and broader diagnostics | turns the bounded live edge path into durable operational history |
-| `v0.6.0` | capacity prediction runtime | keeps prediction later than trusted ingress and durable history |
+| `Tracer 16` / `v0.5.0` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence, turns tap history into queryable operational truth, and sets up dwell and flow analytics without widening product logic |
+| `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress and durable history |
 
 ## Boundaries
 
@@ -66,5 +64,7 @@ Current active line: `v0.4.x`
   normalized event stream used for identified publish
 - bounded deployment workstream: live browser-reachable HTTPS ingress for that
   same `v0.4.1` edge path
+- that bounded deployment workstream is real deployment truth, but it did not
+  consume a tracer number and should not be treated as partial `Tracer 16`
 - `Milestone 1.6`: live departure-close proof in-cluster
 - later line: persistence and prediction after source-backed ingress is stable

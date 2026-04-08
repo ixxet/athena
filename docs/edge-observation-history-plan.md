@@ -190,8 +190,8 @@ Once append-only storage exists, ATHENA should be able to produce:
 Keep this narrow and honest:
 
 1. Add append-only observation persistence in ATHENA.
-2. Add read-only admin-safe exports or internal query surfaces over that
-   history.
+2. Add repo-internal CLI/read models over that history first, not public HTTP
+   report surfaces or HERMES APIs.
 3. Add derived session materialization for duration and visit analytics.
 4. Add alias candidates and explicit alias confirmation later.
 5. Add operator review and override workflows only after the history layer is
@@ -203,6 +203,24 @@ Do **not** start with:
 - occupancy snapshot persistence
 - broad dashboard UI
 - automatic identity merging by name
+
+## First Rollout Posture
+
+The first durable rollout should preserve tomorrow's live tap collection path.
+
+Start with:
+
+- the same tunnel, token, and userscript contract
+- persistence added behind the existing `POST /api/v1/edge/tap` handler
+- fail-open shadow-write posture for the first rollout
+
+That means:
+
+- if the durable write fails, ATHENA should still accept the tap
+- the current live occupancy and identified publish path should keep working
+- degraded persistence must become explicit through logs and metrics
+
+Revisit fail-closed behavior only after the durable path is trusted.
 
 ## Data Handling Rules
 

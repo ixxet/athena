@@ -1,9 +1,11 @@
 package edge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +26,20 @@ type stubPublisher struct {
 type publishedMessage struct {
 	subject string
 	payload []byte
+}
+
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+	})
+
+	return &logs
 }
 
 func (s *stubPublisher) Publish(_ context.Context, subject string, payload []byte) error {
@@ -145,6 +161,82 @@ func TestAcceptTapObservesFailWithoutPublishing(t *testing.T) {
 	}
 	if len(publisher.messages) != 0 {
 		t.Fatalf("len(messages) = %d, want 0", len(publisher.messages))
+	}
+}
+
+func TestAcceptTapAcceptedLogsRedactRawIdentity(t *testing.T) {
+	logs := captureSlog(t)
+
+	publisher := &stubPublisher{}
+	service, err := NewService(publisher, "salt", map[string]string{"entry-node": "entry-token"})
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:       "edge-log-accepted-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "pass",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Access entry granted.",
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+
+	logOutput := logs.String()
+	if strings.Contains(logOutput, req.AccountRaw) {
+		t.Fatalf("log output leaked raw account number: %s", logOutput)
+	}
+	if strings.Contains(logOutput, req.Name) {
+		t.Fatalf("log output leaked resolved name: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, HashAccount(req.AccountRaw, "salt")) {
+		t.Fatalf("log output missing external_identity_hash: %s", logOutput)
+	}
+}
+
+func TestAcceptTapPublishFailureLogsRedactRawIdentity(t *testing.T) {
+	logs := captureSlog(t)
+
+	publisher := &stubPublisher{err: errors.New("nats unavailable")}
+	service, err := NewService(publisher, "salt", map[string]string{"entry-node": "entry-token"})
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:       "edge-log-error-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "pass",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Access entry granted.",
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err == nil {
+		t.Fatal("AcceptTap() error = nil, want publish failure")
+	}
+
+	logOutput := logs.String()
+	if strings.Contains(logOutput, req.AccountRaw) {
+		t.Fatalf("log output leaked raw account number: %s", logOutput)
+	}
+	if strings.Contains(logOutput, req.Name) {
+		t.Fatalf("log output leaked resolved name: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, HashAccount(req.AccountRaw, "salt")) {
+		t.Fatalf("log output missing external_identity_hash: %s", logOutput)
 	}
 }
 

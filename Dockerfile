@@ -18,3 +18,4 @@ COPY --from=build /out/athena /usr/local/bin/athena
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/athena"]
+CMD ["serve"]

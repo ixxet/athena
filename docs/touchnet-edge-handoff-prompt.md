@@ -30,7 +30,8 @@ What the browser bridge captures from TouchNet:
 
 What ATHENA does with those fields today:
 
-- logs the full observation locally with raw operator context
+- logs a redacted local observation with hashed identity plus bounded operator
+  context
 - hashes `account_raw` immediately into `external_identity_hash`
 - publishes only the hashed identity plus facility/zone/source/time downstream
 - does not currently expose a query API for observed edge history
@@ -100,6 +101,6 @@ This handoff prompt is intentionally precise about current behavior:
 
 - capture and ingest are real
 - lossless persistent storage is **not** real yet
-- raw account values are visible in ATHENA logs today
+- raw account values are no longer emitted in routine edge logs today
 - downstream publish still uses the hashed identity only
 - manager or staff overrides belong in a separate operational workflow, not as a rewrite of the original TouchNet outcome

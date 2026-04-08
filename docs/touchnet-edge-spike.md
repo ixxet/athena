@@ -23,6 +23,10 @@ The bounded live deployment workstream later proved the same path through a
 real browser-reachable HTTPS ATHENA ingress, including workstation-specific
 node IDs and a legacy-safe Chromebook variant for one workstation.
 
+That bounded deployment workstream is real deployment truth on `v0.4.1`, but it
+did not consume a tracer number and should not be treated as partial
+`Tracer 16` closure.
+
 What ATHENA now receives from the browser bridge:
 
 - `account_raw`
@@ -80,7 +84,8 @@ depending on what they presented at the reader.
 
 The current spike handles that carefully:
 
-- the raw account value is preserved in ATHENA logs
+- the raw account value is accepted and hashed immediately
+- routine edge logs now redact the raw account value and resolved name
 - the published downstream identity is the hash of the raw account value
 - the operator context includes `account_type` and `name`
 
@@ -239,8 +244,9 @@ Validation used:
   plain in-page `fetch()` for a realistic Chrome path.
 - Real operator value required observing both `pass` and `fail`, not just
   publishing the happy path.
-- The canonical downstream event shape only carries the hashed identity, so
-  operator context currently lives in ATHENA logs rather than a queryable API.
+- The canonical downstream event shape only carries the hashed identity, so the
+  current non-durable operator trail still lives in ATHENA logs rather than a
+  queryable API.
 
 ## Current Recommendation
 
@@ -254,7 +260,8 @@ Short term:
 
 Next likely slices:
 
-1. ATHENA persistence for immutable edge observations
+1. ATHENA persistence for immutable edge observations plus repo-internal
+   CLI/read models over that history
 2. HERMES read-only admin query over observed TouchNet edge history
 3. HERMES write path for manual admit or exception actions
 4. optional `ashton-proto` changes only if downstream consumers truly need more
