@@ -297,7 +297,6 @@ not the homelab substrate.
 - [Growing pains](docs/growing-pains.md)
 - [TouchNet edge spike](docs/touchnet-edge-spike.md)
 - [TouchNet edge handoff prompt](docs/touchnet-edge-handoff-prompt.md)
-- [ATHENA adapter drift handoff pack](docs/athena-adapter-drift-handoff-pack.md)
 - [Mock slice runbook](docs/runbooks/mock-slice.md)
 - [Source-backed ingress runbook](docs/runbooks/source-backed-ingress.md)
 - [Edge ingress runbook](docs/runbooks/edge-ingress.md)

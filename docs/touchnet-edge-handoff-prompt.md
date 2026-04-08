@@ -1,13 +1,5 @@
 # TouchNet Edge Handoff Prompt
 
-This is the older narrow spike handoff for the first TouchNet-to-ATHENA bridge
-reasoning pass.
-
-If you need the broader closeout artifact for the live adapter plus deployment
-workstream, use:
-
-- `docs/athena-adapter-drift-handoff-pack.md`
-
 Use the prompt below to hand this blocker to another chat or engineer without
 losing the actual implementation boundary.
 
@@ -111,6 +103,3 @@ This handoff prompt is intentionally precise about current behavior:
 - raw account values are visible in ATHENA logs today
 - downstream publish still uses the hashed identity only
 - manager or staff overrides belong in a separate operational workflow, not as a rewrite of the original TouchNet outcome
-- later live deployment proof and workstation truth were established after this
-  narrower prompt was written; do not treat this file alone as the full
-  closeout for the broader workstream
