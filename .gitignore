@@ -8,3 +8,4 @@ dist/
 coverage.out
 node_modules/
 athena
+docs/runbooks/fixtures/touchnet-edge-live-*.user.js

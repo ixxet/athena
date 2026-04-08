@@ -72,6 +72,8 @@ Use these files before the facility reopens:
 
 - `docs/runbooks/fixtures/touchnet-edge.user.js`
 - `docs/runbooks/fixtures/touchnet-edge-fixture.html`
+- `docs/runbooks/fixtures/touchnet-edge-template-modern.user.js`
+- `docs/runbooks/fixtures/touchnet-edge-template-legacy.user.js`
 
 Workflow:
 
@@ -88,6 +90,16 @@ Workflow:
 6. Use the fixture buttons to append `Pass` or `Denied` rows.
 7. Confirm that only `Pass` rows affect occupancy and publication, while
    repeated rerenders do not duplicate accepted events or inflate counts.
+
+Template note:
+
+- use `touchnet-edge-template-modern.user.js` for current Chrome/Windows
+  workstations
+- use `touchnet-edge-template-legacy.user.js` for older ChromeOS or legacy
+  Tampermonkey environments
+- keep live-token workstation variants local only; the repo now ignores
+  `touchnet-edge-live-*.user.js` so active secrets do not get committed by
+  accident
 
 ## Chrome Quick Start
 
