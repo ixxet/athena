@@ -195,6 +195,7 @@ func newServeCmd() *cobra.Command {
 			if edgeTapHandler != nil {
 				handlerOpts = append(handlerOpts, server.WithEdgeTapHandler(edgeTapHandler))
 			}
+			handlerOpts = append(handlerOpts, server.WithHistoryPath(cfg.EdgeObservationHistoryPath))
 			handler := server.NewHandler(readPath, collector, adapterName, handlerOpts...)
 
 			httpServer := &http.Server{

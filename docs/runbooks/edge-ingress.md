@@ -92,6 +92,20 @@ Expected result:
 - the output does not contain raw account numbers
 - the output does not contain resolved names
 
+Bounded internal HTTP history support for HERMES:
+
+```bash
+curl -sS 'http://127.0.0.1:18090/api/v1/presence/history?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z'
+```
+
+Expected result:
+
+- the output contains only `direction`, `result`, `observed_at`, and
+  `committed` for each observation
+- the output does not contain raw account numbers
+- the output does not contain resolved names
+- the output does not contain `external_identity_hash`
+
 ## Browser Fixture
 
 Use these files before the facility reopens:
@@ -245,7 +259,9 @@ Admin-facing note:
 - ATHENA now has enough TouchNet context to support later operator or admin
   tooling for reconciliation between student number, RFID card number, name,
   and failure reasons
-- ATHENA does not yet expose a read API for that observed edge history
+- ATHENA now exposes one bounded internal read API for privacy-safe facility
+  history, but it does not expose a public or identity-level query API for
+  that observed edge history
 - if `Hermes` is the intended admin-facing surface, it is a reasonable place to
   add those operator endpoints later while ATHENA remains the ingestion and
   normalization boundary

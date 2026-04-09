@@ -16,6 +16,9 @@ line complete on `main`.
 - identified arrival and departure publication is real
 - explicit in-memory edge-driven occupancy projection is now real for
   `athena serve`
+- one bounded internal HTTP facility-history read is now real on top of the
+  existing durable-history groundwork to support HERMES reconciliation without
+  widening into a public operator surface
 - bounded live in-cluster arrival proof is real through Milestone 1.5
 - bounded live browser-reachable ATHENA edge ingress and occupancy proof is now
   real for `v0.4.1`
@@ -53,6 +56,9 @@ line complete on `main`.
 - observed TouchNet pass/fail history is a plausible next ATHENA persistence
   slice, but operator override workflows should remain separate from the
   physical-truth ingest boundary
+- the new bounded history read must stay privacy-safe, facility-filtered, and
+  read-only; it exists to support HERMES rather than to turn ATHENA into a
+  broad operator product surface
 - duration-of-stay, tap frequency, and workstation-quality metrics should be
   derived from durable append-only observation history, not from ad hoc log
   scraping

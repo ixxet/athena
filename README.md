@@ -71,6 +71,7 @@ flowchart LR
 | HTTP health | `GET /api/v1/health` | Real | Returns service status and adapter name |
 | HTTP occupancy count | `GET /api/v1/presence/count` | Real | Reads through the canonical occupancy path; in `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve mode this is the in-memory edge projection |
 | HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, shadow-writes privacy-safe observations when `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set, and preserves the current accept/publish/projection contract |
+| HTTP history read | `GET /api/v1/presence/history` | Real, bounded internal support | Reads privacy-safe facility-filtered history when `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set; returns only `direction`, `result`, `observed_at`, and `committed` |
 | Prometheus metrics | `GET /metrics` | Real | Exposes `athena_current_occupancy` from the same default read path as HTTP |
 | Serve command | `athena serve` | Real | Starts the HTTP server in either adapter-backed mode or explicit edge-projection mode |
 | CLI count | `athena presence count --format text|json` | Real | Uses ATHENA's canonical adapter-backed read path; live edge projection is a `serve` runtime mode |
@@ -165,11 +166,13 @@ Current runtime behavior is intentionally split:
 This matters because operators may need to reconcile multiple identifiers for
 the same person: student number, RFID card number, and resolved name. ATHENA
 now ingests enough context to support later admin or operator workflows, but it
-does not yet expose a dedicated query API for that observed edge history.
+does not yet expose a public or identity-level query API for that observed edge
+history.
 
 The current durable groundwork is intentionally narrow:
 
-- the read surface is CLI-only through `athena edge history`
+- the read surface is CLI-first through `athena edge history`, plus one bounded
+  internal HTTP facility-history read for HERMES support
 - restart/reload rebuilds occupancy from committed `pass` observations only
 - browser and replay event-id derivation may still drift; ATHENA preserves the
   supplied `event_id` and does not claim cross-source event-id reconciliation
@@ -230,9 +233,10 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
   the only cross-repo slice that is real today
-- durable edge history is file-backed and CLI-readable only when
+- durable edge history is file-backed and now readable through one bounded
+  privacy-safe internal HTTP facility-history surface when
   `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set; there is still no public or
-  operator HTTP surface for that history
+  identity-level operator HTTP surface for that history
 - the live browser path is still a narrow Cloudflare quick tunnel in front of a
   proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
 - the live cluster proof still uses one bounded node token and one facility
