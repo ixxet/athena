@@ -281,13 +281,13 @@ bullets are only the short summary.
 | `v0.2.x` | `v0.2.0`, `v0.2.1` | Shipped | read-path hardening and live read deployment line | lifecycle publish and real ingress adapters |
 | `v0.3.x` | `v0.3.0`, `v0.3.1` | Shipped | lifecycle publish line plus bounded live arrival proof through Milestone 1.5 | source-backed ingress rollout, persistence, and prediction |
 | `v0.4.x` | `v0.4.0`, `v0.4.1` | Shipped | first source-backed ingress adapter, edge-driven occupancy projection, and bounded live edge deployment proof | append-only persistence, broad ingress rollout, and prediction |
-| `v0.5.x` | `v0.5.0` | Current Tracer 16 release line | durable edge-observation groundwork, immutable replay identity hardening, fail-open shadow-write, and restart/reload replay groundwork | durable-branch deployment closeout, broad ingress rollout, and prediction |
+| `v0.5.x` | `v0.5.0`, `v0.5.1` | Shipped | durable edge-observation groundwork, immutable replay identity hardening, fail-open shadow-write, restart/reload replay groundwork, and one bounded privacy-safe facility-history support read for HERMES reconciliation | durable-branch deployment closeout, broad ingress rollout, public or identity-level operator surfaces, and prediction |
 
 ## Current And Planned Release Lines
 
-| Planned tag | Intended purpose | Restrictions | What it should not do yet |
+| Release line | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before the bounded slice is actually real |
+| `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
@@ -295,7 +295,7 @@ bullets are only the short summary.
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
-| `v0.5.0` / `Tracer 16` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence while keeping the live edge slice narrow and trustworthy |
+| `v0.5.1` / Tracer 17 support follow-up | bounded privacy-safe facility-history support for HERMES reconciliation | lets HERMES consume durable history without private file access or broader ATHENA widening |
 | `v0.6.0` / `Tracer 18` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, diagnostics, and facility truth are stable |
 

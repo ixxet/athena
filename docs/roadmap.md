@@ -8,8 +8,10 @@ are earned.
 
 ## Current Line
 
-Current active line: `v0.4.x` shipped, with the `v0.5.0` Tracer 16 release
-line complete on `main`.
+Current active line: `v0.5.1` shipped.
+
+`v0.5.0` remains the Tracer 16 durable-history release line. `v0.5.1` is the
+bounded Tracer 17 support follow-up on that same durable-history branch.
 
 - mock-backed occupancy read path is still real
 - one source-backed CSV ingress adapter is now real locally
@@ -29,9 +31,9 @@ line complete on `main`.
 
 ## Current And Planned Release Lines
 
-| Planned tag | Intended purpose | Restrictions | What it should not do yet |
+| Release line | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
-| `v0.5.0` | durable edge-observation groundwork, first persistence-backed operational history, and ingress hardening | preserve the current tunnel/token/userscript contract and start with fail-open shadow-write posture | do not imply broad ingress rollout, override workflows, or a finished operator surface before append-only history is actually active |
+| `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
@@ -39,7 +41,7 @@ line complete on `main`.
 
 | Line | Role | Why it matters |
 | --- | --- | --- |
-| `Tracer 16` / `v0.5.0` | durable edge-observation groundwork, session inference groundwork, first persistence-backed operational history, and ingress hardening | reduces all-memory dependence, turns tap history into queryable operational truth, and sets up dwell and flow analytics without widening product logic |
+| Tracer 17 support follow-up / `v0.5.1` | bounded privacy-safe facility-history support for HERMES reconciliation | lets HERMES consume durable history without private file access or broader ATHENA widening |
 | `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, and facility truth |
 
