@@ -8,7 +8,7 @@ are earned.
 
 ## Current Line
 
-Current active line: `v0.5.1` shipped.
+Current active line: `Tracer 18 / v0.6.0` facility-truth line on `main`.
 
 `v0.5.0` remains the Tracer 16 durable-history release line. `v0.5.1` is the
 bounded Tracer 17 support follow-up on that same durable-history branch.
@@ -21,6 +21,9 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 - one bounded internal HTTP facility-history read is now real on top of the
   existing durable-history groundwork to support HERMES reconciliation without
   widening into a public operator surface
+- config-gated facility catalog, hours, zones, closure windows, and
+  per-facility metadata reads are now real on `main` through CLI and internal
+  HTTP over validated internal catalog files
 - bounded live in-cluster arrival proof is real through Milestone 1.5
 - bounded live browser-reachable ATHENA edge ingress and occupancy proof is now
   real for `v0.4.1`
