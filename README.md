@@ -258,8 +258,7 @@ bullets are only the short summary.
 
 - additional real ingress adapters beyond the first CSV line
 - broader metrics and diagnostics
-- append-only edge observation history plus first inferred visit-duration
-  analytics
+- broader derived analytics over the new durable edge-observation history
 - a Postgres-backed read/write path once the tracer requires persistence
 - capacity prediction once the read path and event history justify it
 
@@ -278,8 +277,9 @@ bullets are only the short summary.
 | `v0.2.x` | `v0.2.0`, `v0.2.1` | Shipped | read-path hardening and live read deployment line | lifecycle publish and real ingress adapters |
 | `v0.3.x` | `v0.3.0`, `v0.3.1` | Shipped | lifecycle publish line plus bounded live arrival proof through Milestone 1.5 | source-backed ingress rollout, persistence, and prediction |
 | `v0.4.x` | `v0.4.0`, `v0.4.1` | Shipped | first source-backed ingress adapter, edge-driven occupancy projection, and bounded live edge deployment proof | append-only persistence, broad ingress rollout, and prediction |
+| `v0.5.x` | `v0.5.0` | Current Tracer 16 release line | durable edge-observation groundwork, immutable replay identity hardening, fail-open shadow-write, and restart/reload replay groundwork | durable-branch deployment closeout, broad ingress rollout, and prediction |
 
-## Planned Release Lines
+## Current And Planned Release Lines
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |

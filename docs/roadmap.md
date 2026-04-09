@@ -8,7 +8,8 @@ are earned.
 
 ## Current Line
 
-Current active line: `v0.4.x`
+Current active line: `v0.4.x` shipped, with the `v0.5.0` Tracer 16 release
+line complete on `main`.
 
 - mock-backed occupancy read path is still real
 - one source-backed CSV ingress adapter is now real locally
@@ -23,7 +24,7 @@ Current active line: `v0.4.x`
 - bounded live proof still does not include the durable branch, and broad
   ingress rollout is still unproven
 
-## Planned Release Lines
+## Current And Planned Release Lines
 
 | Planned tag | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
