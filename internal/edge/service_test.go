@@ -23,6 +23,12 @@ type stubPublisher struct {
 	err      error
 }
 
+type stubObservationRecorder struct {
+	records []ObservationRecord
+	commits []ObservationCommit
+	err     error
+}
+
 type publishedMessage struct {
 	subject string
 	payload []byte
@@ -52,6 +58,24 @@ func (s *stubPublisher) Publish(_ context.Context, subject string, payload []byt
 		payload: payload,
 	})
 
+	return nil
+}
+
+func (s *stubObservationRecorder) RecordObservation(_ context.Context, record ObservationRecord) error {
+	if s.err != nil {
+		return s.err
+	}
+
+	s.records = append(s.records, record)
+	return nil
+}
+
+func (s *stubObservationRecorder) RecordCommit(_ context.Context, commit ObservationCommit) error {
+	if s.err != nil {
+		return s.err
+	}
+
+	s.commits = append(s.commits, commit)
 	return nil
 }
 
@@ -164,6 +188,106 @@ func TestAcceptTapObservesFailWithoutPublishing(t *testing.T) {
 	}
 }
 
+func TestAcceptTapRecordsDurableObservationsForPassAndFail(t *testing.T) {
+	publisher := &stubPublisher{}
+	recorder := &stubObservationRecorder{}
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithObservationRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	passReq := TapRequest{
+		EventID:       "edge-pass-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		ZoneID:        "gym-floor",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "pass",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Access entry granted.",
+	}
+	if _, err := service.AcceptTap(context.Background(), "entry-token", passReq); err != nil {
+		t.Fatalf("AcceptTap(pass) error = %v", err)
+	}
+
+	failReq := TapRequest{
+		EventID:       "edge-fail-002",
+		AccountRaw:    "301536642",
+		Direction:     "out",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:05:00Z",
+		Result:        "fail",
+		AccountType:   "ISO",
+		Name:          "Another Student",
+		StatusMessage: "Access denied, no rule matches Account.",
+	}
+	if _, err := service.AcceptTap(context.Background(), "entry-token", failReq); err != nil {
+		t.Fatalf("AcceptTap(fail) error = %v", err)
+	}
+
+	if len(recorder.records) != 2 {
+		t.Fatalf("len(records) = %d, want 2", len(recorder.records))
+	}
+	if len(recorder.commits) != 1 {
+		t.Fatalf("len(commits) = %d, want 1", len(recorder.commits))
+	}
+
+	passRecord := recorder.records[0]
+	if passRecord.EventID != passReq.EventID {
+		t.Fatalf("passRecord.EventID = %q, want %q", passRecord.EventID, passReq.EventID)
+	}
+	if passRecord.ExternalIdentityHash != HashAccount(passReq.AccountRaw, "salt") {
+		t.Fatalf("passRecord.ExternalIdentityHash = %q, want hashed account", passRecord.ExternalIdentityHash)
+	}
+	if passRecord.AccountType != "Standard" {
+		t.Fatalf("passRecord.AccountType = %q, want Standard", passRecord.AccountType)
+	}
+	if passRecord.CommittedAt != nil {
+		t.Fatalf("passRecord.CommittedAt = %v, want nil on observed row", passRecord.CommittedAt)
+	}
+	if !passRecord.NamePresent {
+		t.Fatal("passRecord.NamePresent = false, want true")
+	}
+	if passRecord.StoredAt.IsZero() {
+		t.Fatal("passRecord.StoredAt = zero, want durable timestamp")
+	}
+	if passRecord.ObservationID == "" {
+		t.Fatal("passRecord.ObservationID = empty, want immutable durable observation identity")
+	}
+
+	failRecord := recorder.records[1]
+	if failRecord.Result != "fail" {
+		t.Fatalf("failRecord.Result = %q, want fail", failRecord.Result)
+	}
+	if failRecord.Direction != domain.DirectionOut {
+		t.Fatalf("failRecord.Direction = %q, want out", failRecord.Direction)
+	}
+	if failRecord.ExternalIdentityHash != HashAccount(failReq.AccountRaw, "salt") {
+		t.Fatalf("failRecord.ExternalIdentityHash = %q, want hashed account", failRecord.ExternalIdentityHash)
+	}
+	if recorder.commits[0].EventID != passReq.EventID {
+		t.Fatalf("commit.EventID = %q, want %q", recorder.commits[0].EventID, passReq.EventID)
+	}
+	if recorder.commits[0].ObservationID == "" {
+		t.Fatal("commit.ObservationID = empty, want durable observation identity")
+	}
+	if recorder.commits[0].ObservationID != passRecord.ObservationID {
+		t.Fatalf("commit.ObservationID = %q, want %q", recorder.commits[0].ObservationID, passRecord.ObservationID)
+	}
+	if recorder.commits[0].CommittedAt.IsZero() {
+		t.Fatal("commit.CommittedAt = zero, want durable commit timestamp")
+	}
+}
+
 func TestAcceptTapAcceptedLogsRedactRawIdentity(t *testing.T) {
 	logs := captureSlog(t)
 
@@ -183,7 +307,7 @@ func TestAcceptTapAcceptedLogsRedactRawIdentity(t *testing.T) {
 		Result:        "pass",
 		AccountType:   "Standard",
 		Name:          "Fixture Student",
-		StatusMessage: "Access entry granted.",
+		StatusMessage: "Access entry granted for Fixture Student 1000123456.",
 	}
 
 	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err != nil {
@@ -196,6 +320,9 @@ func TestAcceptTapAcceptedLogsRedactRawIdentity(t *testing.T) {
 	}
 	if strings.Contains(logOutput, req.Name) {
 		t.Fatalf("log output leaked resolved name: %s", logOutput)
+	}
+	if strings.Contains(logOutput, req.StatusMessage) {
+		t.Fatalf("log output leaked status_message: %s", logOutput)
 	}
 	if !strings.Contains(logOutput, HashAccount(req.AccountRaw, "salt")) {
 		t.Fatalf("log output missing external_identity_hash: %s", logOutput)
@@ -221,7 +348,7 @@ func TestAcceptTapPublishFailureLogsRedactRawIdentity(t *testing.T) {
 		Result:        "pass",
 		AccountType:   "Standard",
 		Name:          "Fixture Student",
-		StatusMessage: "Access entry granted.",
+		StatusMessage: "Access entry granted for Fixture Student 1000123456.",
 	}
 
 	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err == nil {
@@ -235,8 +362,145 @@ func TestAcceptTapPublishFailureLogsRedactRawIdentity(t *testing.T) {
 	if strings.Contains(logOutput, req.Name) {
 		t.Fatalf("log output leaked resolved name: %s", logOutput)
 	}
+	if strings.Contains(logOutput, req.StatusMessage) {
+		t.Fatalf("log output leaked status_message: %s", logOutput)
+	}
 	if !strings.Contains(logOutput, HashAccount(req.AccountRaw, "salt")) {
 		t.Fatalf("log output missing external_identity_hash: %s", logOutput)
+	}
+}
+
+func TestAcceptTapShadowWriteFailureDoesNotChangeAcceptOutcome(t *testing.T) {
+	logs := captureSlog(t)
+
+	publisher := &stubPublisher{}
+	recorder := &stubObservationRecorder{err: errors.New("disk full")}
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithObservationRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:       "edge-shadow-write-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "pass",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Access entry granted.",
+	}
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", req)
+	if err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+	if result.Status != "accepted" || !result.Published {
+		t.Fatalf("result = %#v, want accepted published result", result)
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(publisher.messages))
+	}
+	if len(recorder.records) != 0 {
+		t.Fatalf("len(records) = %d, want 0 after failed durable write", len(recorder.records))
+	}
+	if len(recorder.commits) != 0 {
+		t.Fatalf("len(commits) = %d, want 0 after failed durable write", len(recorder.commits))
+	}
+
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "edge observation durable write failed") {
+		t.Fatalf("log output = %q, want durable write failure message", logOutput)
+	}
+	if strings.Contains(logOutput, req.AccountRaw) {
+		t.Fatalf("log output leaked raw account number: %s", logOutput)
+	}
+	if strings.Contains(logOutput, req.Name) {
+		t.Fatalf("log output leaked resolved name: %s", logOutput)
+	}
+}
+
+func TestAcceptTapPublishFailureDoesNotRecordDurableCommitMarker(t *testing.T) {
+	publisher := &stubPublisher{err: errors.New("nats unavailable")}
+	recorder := &stubObservationRecorder{}
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithObservationRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:       "edge-commit-fail-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "pass",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Access entry granted.",
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err == nil {
+		t.Fatal("AcceptTap() error = nil, want publish failure")
+	} else if !errors.Is(err, ErrPublishUnavailable) {
+		t.Fatalf("AcceptTap() error = %v, want ErrPublishUnavailable", err)
+	}
+
+	if len(recorder.records) != 1 {
+		t.Fatalf("len(records) = %d, want 1 observed row", len(recorder.records))
+	}
+	if len(recorder.commits) != 0 {
+		t.Fatalf("len(commits) = %d, want 0 commit markers", len(recorder.commits))
+	}
+}
+
+func TestAcceptTapDurableRecordDropsFreeTextStatusMessage(t *testing.T) {
+	recorder := &stubObservationRecorder{}
+	service, err := NewService(
+		&stubPublisher{},
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithObservationRecorder(recorder),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	req := TapRequest{
+		EventID:       "edge-status-redaction-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "fail",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "Denied for Fixture Student 1000123456",
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", req); err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+
+	if len(recorder.records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(recorder.records))
+	}
+	if recorder.records[0].AccountType != "Standard" {
+		t.Fatalf("AccountType = %q, want Standard", recorder.records[0].AccountType)
 	}
 }
 

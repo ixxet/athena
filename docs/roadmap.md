@@ -18,7 +18,10 @@ Current active line: `v0.4.x`
 - bounded live in-cluster arrival proof is real through Milestone 1.5
 - bounded live browser-reachable ATHENA edge ingress and occupancy proof is now
   real for `v0.4.1`
-- persistence is still deferred and broad ingress rollout is still unproven
+- optional local file-backed durable history and restart replay groundwork now
+  exist behind explicit config
+- bounded live proof still does not include the durable branch, and broad
+  ingress rollout is still unproven
 
 ## Planned Release Lines
 
@@ -41,8 +44,8 @@ Current active line: `v0.4.x`
 - Tracer 9 does not require ATHENA widening by default
 - Tracer 10 keeps ingress physical-truth only and does not widen into
   deployment, prediction, or social logic
-- the edge-driven occupancy slice keeps projection in memory only; no append-only
-  observation storage or occupancy snapshot persistence is active yet
+- the edge-driven occupancy slice keeps projection in memory by default; the
+  new append-only file-backed history path is explicit and optional
 - the bounded live deployment uses one facility, one node token, a private GHCR
   pull secret, and a narrow HTTPS proxy path; it is not yet a broad ATHENA
   ingress rollout

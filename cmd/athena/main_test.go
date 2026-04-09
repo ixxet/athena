@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ixxet/athena/internal/config"
+	"github.com/ixxet/athena/internal/domain"
+	"github.com/ixxet/athena/internal/edge"
+	"github.com/ixxet/athena/internal/edgehistory"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/server"
 )
@@ -72,6 +78,56 @@ func TestBuildAppWithCSVAdapterRejectsBrokenSource(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read csv source") {
 		t.Fatalf("buildApp() error = %q, want read csv source context", err)
+	}
+}
+
+func TestEdgeHistoryCommandPrintsRecentDurableObservations(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "edge-history.jsonl")
+	store, err := edgehistory.NewFileStore(historyPath)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	record := edge.ObservationRecord{
+		EventID:              "edge-001",
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		NodeID:               "entry-node",
+		Direction:            domain.DirectionIn,
+		Result:               "pass",
+		Source:               domain.SourceRFID,
+		ExternalIdentityHash: "hashed-account",
+		ObservedAt:           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		StoredAt:             time.Date(2026, 4, 4, 12, 0, 1, 0, time.UTC),
+		AccountType:          "Standard",
+		NamePresent:          true,
+	}
+	if err := store.RecordObservation(context.Background(), record); err != nil {
+		t.Fatalf("RecordObservation() error = %v", err)
+	}
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"edge",
+		"history",
+		"--history-path", historyPath,
+		"--limit", "1",
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "\"external_identity_hash\": \"hashed-account\"") {
+		t.Fatalf("output = %q, want external_identity_hash", output)
+	}
+	if strings.Contains(output, "1000123456") {
+		t.Fatalf("output leaked raw account number: %s", output)
 	}
 }
 

@@ -16,6 +16,7 @@ type Config struct {
 	EdgeHashSalt                string
 	EdgeTokens                  map[string]string
 	EdgeOccupancyProjection     bool
+	EdgeObservationHistoryPath  string
 	DefaultFacilityID           string
 	DefaultZoneID               string
 	MockFacilityID              string
@@ -56,6 +57,7 @@ func Load() (Config, error) {
 		EdgeHashSalt:                getEnv("ATHENA_EDGE_HASH_SALT", ""),
 		EdgeTokens:                  parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
 		EdgeOccupancyProjection:     edgeProjection,
+		EdgeObservationHistoryPath:  getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
 		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
 		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
 		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),

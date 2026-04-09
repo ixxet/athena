@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 	"github.com/ixxet/athena/internal/config"
 	"github.com/ixxet/athena/internal/domain"
 	edgeingress "github.com/ixxet/athena/internal/edge"
+	"github.com/ixxet/athena/internal/edgehistory"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 	"github.com/ixxet/athena/internal/publish"
@@ -83,7 +85,14 @@ func newServeCmd() *cobra.Command {
 				publisher      publish.Publisher
 				closePublisher func() error
 				edgeTapHandler http.Handler
+				historyStore   *edgehistory.FileStore
 			)
+			if cfg.EdgeObservationHistoryPath != "" {
+				historyStore, err = edgehistory.NewFileStore(cfg.EdgeObservationHistoryPath)
+				if err != nil {
+					return err
+				}
+			}
 			if cfg.EdgeOccupancyProjection {
 				publisher, closePublisher, err = newPublisherHandle(cfg)
 				if err != nil {
@@ -92,14 +101,35 @@ func newServeCmd() *cobra.Command {
 				defer closePublisher()
 
 				projector := presence.NewProjector()
+				if historyStore != nil {
+					replay, err := edgehistory.ReplayFile(historyStore.Path(), projector)
+					if err != nil {
+						return fmt.Errorf("rebuild edge occupancy projection from history: %w", err)
+					}
+					slog.Info(
+						"edge observation history replayed",
+						"path", historyStore.Path(),
+						"observations_total", replay.Total,
+						"pass_total", replay.Pass,
+						"fail_total", replay.Fail,
+						"applied_total", replay.Applied,
+						"observed_total", replay.Observed,
+					)
+				}
 				readPath = presence.NewReadPath(projector, defaultOccupancyFilter(cfg))
 				adapterName = "edge-projection"
 
+				edgeOpts := []edgeingress.Option{
+					edgeingress.WithProjection(projector),
+				}
+				if historyStore != nil {
+					edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(historyStore))
+				}
 				edgeService, err := edgeingress.NewService(
 					publisher,
 					cfg.EdgeHashSalt,
 					cfg.EdgeTokens,
-					edgeingress.WithProjection(projector),
+					edgeOpts...,
 				)
 				if err != nil {
 					return err
@@ -108,7 +138,7 @@ func newServeCmd() *cobra.Command {
 				slog.Info(
 					"edge occupancy projection enabled",
 					"occupancy_source", "edge-projection",
-					"persistence", "deferred",
+					"history_path", cfg.EdgeObservationHistoryPath,
 					"node_count", len(cfg.EdgeTokens),
 				)
 			} else {
@@ -147,12 +177,16 @@ func newServeCmd() *cobra.Command {
 				}
 
 				if cfg.EdgeHashSalt != "" || len(cfg.EdgeTokens) > 0 {
-					edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens)
+					edgeOpts := make([]edgeingress.Option, 0, 1)
+					if historyStore != nil {
+						edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(historyStore))
+					}
+					edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens, edgeOpts...)
 					if err != nil {
 						return err
 					}
 					edgeTapHandler = edgeingress.NewHandler(edgeService)
-					slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens))
+					slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens), "history_path", cfg.EdgeObservationHistoryPath)
 				}
 			}
 
@@ -440,6 +474,64 @@ func newEdgeCmd() *cobra.Command {
 	_ = replayCmd.MarkFlagRequired("token")
 
 	edgeCmd.AddCommand(replayCmd)
+
+	var (
+		historyPath   string
+		historyLimit  int
+		historyFormat string
+	)
+
+	historyCmd := &cobra.Command{
+		Use:   "history",
+		Short: "Inspect recent durable edge observations.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if historyLimit <= 0 {
+				return fmt.Errorf("--limit must be > 0")
+			}
+			trimmedPath := strings.TrimSpace(historyPath)
+			if trimmedPath == "" {
+				return fmt.Errorf("--history-path is required")
+			}
+
+			records, err := edgehistory.ReadRecent(trimmedPath, historyLimit)
+			if err != nil {
+				return err
+			}
+
+			switch historyFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(records)
+			case "text":
+				for _, record := range records {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"event_id=%s facility_id=%s zone_id=%s node_id=%s direction=%s result=%s external_identity_hash=%s observed_at=%s stored_at=%s\n",
+						record.EventID,
+						record.FacilityID,
+						record.ZoneID,
+						record.NodeID,
+						record.Direction,
+						record.Result,
+						record.ExternalIdentityHash,
+						record.ObservedAt.Format("2006-01-02T15:04:05Z07:00"),
+						record.StoredAt.Format("2006-01-02T15:04:05Z07:00"),
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", historyFormat)
+			}
+		},
+	}
+	historyCmd.Flags().StringVar(&historyPath, "history-path", os.Getenv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH"), "path to the durable edge observation history file")
+	historyCmd.Flags().IntVar(&historyLimit, "limit", 20, "maximum number of recent observations to print")
+	historyCmd.Flags().StringVar(&historyFormat, "format", "text", "output format: text or json")
+
+	edgeCmd.AddCommand(historyCmd)
 	return edgeCmd
 }
 

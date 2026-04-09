@@ -60,10 +60,11 @@ type observedTap struct {
 }
 
 type Service struct {
-	publisher publish.Publisher
-	hashSalt  string
-	tokens    map[string]string
-	projector ProjectionApplier
+	publisher           publish.Publisher
+	hashSalt            string
+	tokens              map[string]string
+	projector           ProjectionApplier
+	observationRecorder ObservationRecorder
 }
 
 type ProjectionApplier interface {
@@ -71,11 +72,22 @@ type ProjectionApplier interface {
 	ApplyWithEffect(domain.PresenceEvent, func() error) (presence.ProjectionResult, error)
 }
 
+type ObservationRecorder interface {
+	RecordObservation(context.Context, ObservationRecord) error
+	RecordCommit(context.Context, ObservationCommit) error
+}
+
 type Option func(*Service)
 
 func WithProjection(projector ProjectionApplier) Option {
 	return func(service *Service) {
 		service.projector = projector
+	}
+}
+
+func WithObservationRecorder(recorder ObservationRecorder) Option {
+	return func(service *Service) {
+		service.observationRecorder = recorder
 	}
 }
 
@@ -117,6 +129,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 	if err := s.authorize(observed.nodeID, token); err != nil {
 		return AcceptedTap{}, err
 	}
+	recordedObservation := s.recordObservation(ctx, observed)
 
 	if observed.result != "pass" {
 		s.logObservedTap("edge tap observed", observed, false, "")
@@ -162,6 +175,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 			}, nil
 		}
 		s.logAcceptedTap(observed, message.Subject)
+		s.recordCommittedPass(ctx, observed, recordedObservation)
 
 		return AcceptedTap{
 			EventID:   observed.event.ID,
@@ -187,6 +201,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 	}
 
 	s.logAcceptedTap(observed, message.Subject)
+	s.recordCommittedPass(ctx, observed, recordedObservation)
 
 	return AcceptedTap{
 		EventID:   observed.event.ID,
@@ -282,6 +297,31 @@ func (s *Service) logAcceptedTap(observed observedTap, subject string) {
 	slog.Info("edge tap accepted", append(s.logFields(observed), "published", true, "subject", subject)...)
 }
 
+func (s *Service) recordObservation(ctx context.Context, observed observedTap) *ObservationRecord {
+	if s.observationRecorder == nil {
+		return nil
+	}
+
+	record := newObservationRecord(observed, time.Now().UTC())
+	if err := s.observationRecorder.RecordObservation(ctx, record); err != nil {
+		slog.Error("edge observation durable write failed", append(s.logFields(observed), "error", err)...)
+		return nil
+	}
+
+	return &record
+}
+
+func (s *Service) recordCommittedPass(ctx context.Context, observed observedTap, record *ObservationRecord) {
+	if s.observationRecorder == nil || observed.result != "pass" || record == nil {
+		return
+	}
+
+	commit := newObservationCommit(*record, time.Now().UTC())
+	if err := s.observationRecorder.RecordCommit(ctx, commit); err != nil {
+		slog.Error("edge observation durable commit marker failed", append(s.logFields(observed), "error", err)...)
+	}
+}
+
 func (s *Service) logFields(observed observedTap) []any {
 	return []any{
 		"event_id", observed.event.ID,
@@ -291,7 +331,7 @@ func (s *Service) logFields(observed observedTap) []any {
 		"external_identity_hash", observed.event.ExternalIdentityHash,
 		"account_type", observed.accountType,
 		"name_present", observed.name != "",
-		"status_message", observed.statusMessage,
+		"status_message_present", observed.statusMessage != "",
 	}
 }
 

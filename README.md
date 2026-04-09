@@ -70,11 +70,12 @@ flowchart LR
 | --- | --- | --- | --- |
 | HTTP health | `GET /api/v1/health` | Real | Returns service status and adapter name |
 | HTTP occupancy count | `GET /api/v1/presence/count` | Real | Reads through the canonical occupancy path; in `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve mode this is the in-memory edge projection |
-| HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, keeps `fail` observations local, and can update live occupancy plus identified arrival or departure publication |
+| HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, shadow-writes privacy-safe observations when `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set, and preserves the current accept/publish/projection contract |
 | Prometheus metrics | `GET /metrics` | Real | Exposes `athena_current_occupancy` from the same default read path as HTTP |
 | Serve command | `athena serve` | Real | Starts the HTTP server in either adapter-backed mode or explicit edge-projection mode |
 | CLI count | `athena presence count --format text|json` | Real | Uses ATHENA's canonical adapter-backed read path; live edge projection is a `serve` runtime mode |
 | Raw TouchNet replay | `athena edge replay-touchnet` | Real | Replays raw TouchNet report exports through the same edge ingress path used by the live browser bridge |
+| Internal durable history read | `athena edge history --history-path ...` | Real, internal-only | Reads recent append-only durable observations through a CLI-only surface over hashed identities |
 | One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
 | One-shot departure publish | `athena presence publish-identified-departures` | Real | Publishes the current identified-departure batch through NATS |
 | Background publish worker | `athena serve` with `ATHENA_NATS_URL` and adapter-backed mode | Real | Dedupes in-process and republishes identified arrivals and departures on a configured interval |
@@ -95,6 +96,7 @@ flowchart LR
 | Adapter model | Mock adapter | Instituted | `v0.1.x` -> `v0.4.x` | Deterministic fixtures remain available for tests and bounded smoke |
 | Real ingress adapter | CSV presence-event adapter plus push-based edge ingress | Real | `v0.4.x` | CSV remains replay/import truth; edge ingress is the live source when explicit projection mode is enabled |
 | Live occupancy projection | In-memory identity and aggregate projection | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
+| Durable edge history groundwork | Append-only file-backed observation journal plus replay helper | Real, explicit, local/runtime | `v0.5.0` | Shadow-writes privacy-safe observations behind ingress and can rebuild the in-memory projection from committed pass markers on restart when configured |
 | Database schema | PostgreSQL migration files | Authored, not active in runtime | `v0.5.0` | The current executable slice does not yet query Postgres |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
@@ -128,8 +130,10 @@ recruitable, or part of a team flow. That intent lives in APOLLO.
 The publish worker keeps a process-local seen set so it does not republish the
 same mock arrivals on every polling interval. In explicit edge-projection mode,
 the live tap path publishes directly from normalized pass events after the
-projection accepts them. Cross-restart replay handling is still intentionally
-left to downstream idempotency.
+projection accepts them. When `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set in
+projection mode, ATHENA also replays committed `pass` observations into a fresh
+projector before it starts serving HTTP. Cross-restart publish dedupe is still
+intentionally left to downstream idempotency.
 
 ## Edge Observation Note
 
@@ -150,6 +154,11 @@ Current runtime behavior is intentionally split:
   when `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
 - `fail` observations are logged for operator diagnostics and reconciliation but
   are not yet published as visit-lifecycle events
+- authorized observations can also be shadow-written append-only when
+  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set
+- the durable record stores the hashed identity plus bounded operational fields,
+  but does not store raw account values, resolved names, or free-text
+  `status_message`
 - the canonical published identifier remains the hashed account value, not the
   raw student or RFID number
 
@@ -157,6 +166,13 @@ This matters because operators may need to reconcile multiple identifiers for
 the same person: student number, RFID card number, and resolved name. ATHENA
 now ingests enough context to support later admin or operator workflows, but it
 does not yet expose a dedicated query API for that observed edge history.
+
+The current durable groundwork is intentionally narrow:
+
+- the read surface is CLI-only through `athena edge history`
+- restart/reload rebuilds occupancy from committed `pass` observations only
+- browser and replay event-id derivation may still drift; ATHENA preserves the
+  supplied `event_id` and does not claim cross-source event-id reconciliation
 
 If `Hermes` is the intended admin-facing service, it is a reasonable future
 surface for those reconciliation endpoints, with ATHENA remaining the ingest,
@@ -170,8 +186,8 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 | Area | Current caveat | Why it matters |
 | --- | --- | --- |
 | Container CLI mode | The Docker image now defaults to `athena serve`, so CLI-only container use must override the command explicitly | Default runtime behavior now matches HTTP-service deployments instead of printing help and exiting |
-| Edge ingress logs | Routine edge logs now redact raw account values and resolved names, but the operator trail is still log-backed rather than durable | Current live diagnostics are safer than before, but they are not a substitute for append-only history |
-| Persistence | Postgres schema exists, but the active runtime still keeps live edge occupancy in memory only | Readers should not assume append-only observation storage or snapshot persistence are active |
+| Edge ingress logs | Routine edge logs redact raw account values and resolved names, and the optional durable file history does the same | Safer diagnostics and restart groundwork exist now, but there is still no public or operator search surface |
+| Persistence | Append-only file-backed observation history is explicit and optional; Postgres schema files still exist but are not active in runtime | Readers should not assume relational history or snapshot persistence are active just because durable history groundwork now exists |
 | Publish dedupe | Republish protection is process-local | Restart safety currently depends on downstream idempotency more than ATHENA memory |
 | Projection mode | Edge-driven occupancy requires an explicit `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config | This tracer changes the occupancy source intentionally, not by config accident |
 | Health and metrics | The surfaces are useful, but still narrower than a mature production service would expose | Good for the tracer, not yet the final observability story |
@@ -184,6 +200,11 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - a source-backed CSV adapter can now drive the same occupancy read path locally
 - a push-based edge ingress can authenticate per-node clients, hash raw account ids, and publish identified arrival and departure events through NATS
 - an explicit in-memory edge occupancy projection can now drive `/api/v1/presence/count` and Prometheus from the same normalized pass-event stream used for identified publication
+- an optional append-only durable edge history file can now shadow-write both
+  `pass` and `fail` observations behind the same ingress path without changing
+  the live response contract
+- projection-mode restart can now rebuild occupancy deterministically from that
+  committed `pass` history before serving HTTP
 - raw TouchNet access reports can replay through the same edge ingress route used by the live browser bridge
 - unknown facilities resolve to a safe zero count instead of panicking or going
   negative
@@ -204,17 +225,21 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - the CSV adapter is local-runtime proof only and does not widen the existing
   live deployment claim
 - live edge-driven occupancy is explicit serve-mode behavior only; it does not
-  activate append-only persistence or widen the current deployment claim beyond
-  one bounded facility and node rollout
+  widen the current deployment claim beyond one bounded facility and node
+  rollout
 - the metric surface is intentionally small
 - publication is limited to identified visit lifecycle events because that is
   the only cross-repo slice that is real today
-- observed edge history is still log-backed and in-memory only; the durable
-  append-only plan is documented but not active yet
+- durable edge history is file-backed and CLI-readable only when
+  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set; there is still no public or
+  operator HTTP surface for that history
 - the live browser path is still a narrow Cloudflare quick tunnel in front of a
   proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
 - the live cluster proof still uses one bounded node token and one facility
   rollout; it does not widen ATHENA into a broad ingress rollout
+- browser/userscript and replay event-id derivation may still drift today; the
+  durable branch preserves the provided `event_id` but does not reconcile those
+  variants into one cross-source truth claim
 - the bounded live edge deployment workstream is real deployment truth on
   `v0.4.1`, but it did not consume a tracer number and does not partially close
   `Tracer 16`
@@ -222,9 +247,9 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 ### Authored but not yet active
 
 - `db/migrations/001_initial.up.sql` defines the first ATHENA relational schema
-- the repo includes the first shape for facilities and presence events storage
-- future read or analytics work can grow into that schema without redefining the
-  ownership model
+- that schema is not sufficient as-is for truthful append-only edge history
+- the new durable branch does not activate Postgres or reuse
+  `athena.presence_events` as Tracer 16 truth
 
 ### Planned next
 

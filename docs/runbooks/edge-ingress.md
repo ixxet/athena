@@ -11,7 +11,10 @@ In explicit edge-projection mode, the same normalized pass event now drives:
 - live occupancy projection for `/api/v1/presence/count` and `/metrics`
 - identified arrival or departure publication to NATS
 
-Persistence is still deferred in this slice.
+When `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set, every authorized edge
+observation is also shadow-written append-only after normalization and token
+auth, before the existing `fail` / `pass` split. Durable-write failure stays
+fail-open for the live ingress path.
 
 ## Environment
 
@@ -26,11 +29,14 @@ ATHENA_NATS_URL=nats://127.0.0.1:4222 \
 ATHENA_EDGE_HASH_SALT=demo-salt \
 ATHENA_EDGE_TOKENS='entry-node=entry-token,exit-node=exit-token' \
 ATHENA_EDGE_OCCUPANCY_PROJECTION=true \
+ATHENA_EDGE_OBSERVATION_HISTORY_PATH=/tmp/athena-edge-history.jsonl \
 go run ./cmd/athena serve
 ```
 
 If the edge config is valid, `/api/v1/edge/tap` is mounted automatically and
-`/api/v1/presence/count` now reads from the in-memory edge projection.
+`/api/v1/presence/count` now reads from the in-memory edge projection. If the
+history path is configured, ATHENA replays committed `pass` observations before
+it starts listening.
 
 ## Raw TouchNet Replay
 
@@ -65,6 +71,26 @@ Expected result:
 - `GET /api/v1/presence/count?facility=ashtonbee&zone=gym-floor` reflects the
   replayed live projection state
 - identified presence messages publish to the existing NATS subjects
+
+## Internal Durable History Check
+
+Use the internal-only CLI surface to inspect recent stored observations without
+widening HTTP:
+
+```bash
+cd /Users/zizo/Personal-Projects/ASHTON/athena
+
+go run ./cmd/athena edge history \
+  --history-path /tmp/athena-edge-history.jsonl \
+  --limit 20 \
+  --format json
+```
+
+Expected result:
+
+- the output contains `external_identity_hash`
+- the output does not contain raw account numbers
+- the output does not contain resolved names
 
 ## Browser Fixture
 
@@ -169,6 +195,15 @@ Operational note:
 
 - if `ATHENA_EDGE_TOKENS` changes through the live secret, restart the ATHENA
   deployment so the pod reloads the new node map
+- if `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is enabled, a restart also replays
+  committed `pass` observations before ATHENA serves traffic again
+
+Restart / reload note:
+
+- if the durable history file is unreadable, `athena serve` exits instead of
+  claiming a rebuilt edge projection from a cold state
+- durable-write failure during live ingress does not change the existing
+  accepted / observed tap response or the publish / projection outcome
 
 Compatibility note:
 
@@ -197,6 +232,11 @@ Current behavior:
   `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
 - `fail` rows are accepted as observations and logged, but are not published to
   the current NATS visit-lifecycle subjects
+- authorized rows can also be shadow-written into the durable history file when
+  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set
+- the durable record keeps `external_identity_hash`, not the raw account
+  number, and stores only `name_present`, not the resolved name text or
+  free-text `status_message`
 - published visit events still use the hashed account as the canonical identity
   value, not the raw account number
 
@@ -209,6 +249,9 @@ Admin-facing note:
 - if `Hermes` is the intended admin-facing surface, it is a reasonable place to
   add those operator endpoints later while ATHENA remains the ingestion and
   normalization boundary
+- browser/userscript and replay event-id derivation may still drift today; the
+  durable history path preserves the supplied `event_id` but does not claim to
+  reconcile those variants yet
 
 ## Time Interpretation
 
@@ -220,6 +263,7 @@ Admin-facing note:
 ## Required Checks
 
 - `go test ./...`
+- `go test -count=1 ./internal/edge ./internal/edgehistory ./cmd/athena`
 - `go test -count=5 ./internal/config ./internal/edge ./internal/touchnet`
 - `go test -count=5 ./internal/presence ./internal/publish ./internal/server ./cmd/athena`
 
@@ -239,6 +283,12 @@ The destructive hardening pass for this slice locally verified:
   projection path
 - emitted identified payloads contain the hashed identity only, not the raw
   account value
+- durable history files contain the hashed identity only, not raw account
+  values, resolved names, or free-text `status_message`
+- durable-write failure is fail-open and does not change the existing tap
+  outcome
+- restart rebuild can restore the in-memory projection from committed `pass`
+  observations before serving
 - publish failure returns `503` and does not commit the in-memory projection
 
 Use the hardening smoke sequence below when you need a closure-level recheck:
@@ -260,8 +310,10 @@ Use the hardening smoke sequence below when you need a closure-level recheck:
 - `/api/v1/presence/count` reads from the in-memory edge projection only when
   `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`; adapter-backed read paths remain real
   outside that mode
-- no ATHENA persistence is activated in this slice
+- append-only durable history is activated only when
+  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set
 - APOLLO consumers remain unchanged
 - bounded live deployment truth is now proven for one facility and one node
-  token, but broad ingress rollout and persistence are still deferred
+  token, but the durable history branch is still local/runtime proof rather than
+  bounded live deployment proof
 - the userscript is intentionally DOM-based and does not capture raw keystrokes

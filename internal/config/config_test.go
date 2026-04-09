@@ -191,3 +191,16 @@ func TestLoadParsesEdgeProjectionConfig(t *testing.T) {
 		t.Fatal("EdgeOccupancyProjection = false, want true")
 	}
 }
+
+func TestLoadParsesEdgeObservationHistoryPath(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", "/tmp/athena-edge-history.jsonl")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.EdgeObservationHistoryPath != "/tmp/athena-edge-history.jsonl" {
+		t.Fatalf("EdgeObservationHistoryPath = %q, want /tmp/athena-edge-history.jsonl", cfg.EdgeObservationHistoryPath)
+	}
+}
