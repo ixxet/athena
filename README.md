@@ -72,9 +72,13 @@ flowchart LR
 | HTTP occupancy count | `GET /api/v1/presence/count` | Real | Reads through the canonical occupancy path; in `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve mode this is the in-memory edge projection |
 | HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, shadow-writes privacy-safe observations when `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set, and preserves the current accept/publish/projection contract |
 | HTTP history read | `GET /api/v1/presence/history` | Real, bounded internal support | Reads privacy-safe facility-filtered history when `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set; returns only `direction`, `result`, `observed_at`, and `committed` |
+| HTTP facility catalog | `GET /api/v1/facilities` | Real, internal-only, config-gated | Reads facility summaries from `ATHENA_FACILITY_CATALOG_PATH`; returns `facility_id`, `name`, and `timezone` only |
+| HTTP facility detail | `GET /api/v1/facilities/{facility_id}` | Real, internal-only, config-gated | Reads one facility's hours, zones, closure windows, and bounded metadata from the same validated catalog file |
 | Prometheus metrics | `GET /metrics` | Real | Exposes `athena_current_occupancy` from the same default read path as HTTP |
 | Serve command | `athena serve` | Real | Starts the HTTP server in either adapter-backed mode or explicit edge-projection mode |
 | CLI count | `athena presence count --format text|json` | Real | Uses ATHENA's canonical adapter-backed read path; live edge projection is a `serve` runtime mode |
+| CLI facility catalog | `athena facility list --catalog-path ...` | Real, internal-only | Lists facility summaries from the validated catalog file used by the internal HTTP surface |
+| CLI facility detail | `athena facility show --facility <id> --catalog-path ...` | Real, internal-only | Shows one facility's hours, zones, closure windows, and bounded metadata without inventing derived scheduling answers |
 | Raw TouchNet replay | `athena edge replay-touchnet` | Real | Replays raw TouchNet report exports through the same edge ingress path used by the live browser bridge |
 | Internal durable history read | `athena edge history --history-path ...` | Real, internal-only | Reads recent append-only durable observations through a CLI-only surface over hashed identities |
 | One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
@@ -102,7 +106,7 @@ flowchart LR
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
 | Redis utility layer | Redis | Deferred | later than `v0.5.0` | Useful later for hot counters and short-lived aggregates |
-| Facility metadata surfaces | facility catalog, hours, zones, closure windows, and per-facility metadata reads | Planned | `v0.6.0` | Comes before prediction so later sports/session logic can build on trustworthy facility truth |
+| Facility truth catalog | validated file-backed facility catalog plus CLI/internal HTTP reads | Real, internal-only, config-gated | `v0.6.0` | Keeps facility truth ATHENA-owned without activating Postgres or widening into scheduling logic |
 | Prediction engine | EWMA + historical binning | Deferred | later than `v0.6.0` | ADR-preserved design, not runtime truth yet |
 
 ## Data Ownership And Boundaries
@@ -213,6 +217,9 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
   negative
 - HTTP and Prometheus share one canonical default occupancy path per active
   serve mode, while CLI count remains adapter-backed outside the live runtime
+- a validated file-backed facility catalog can now back internal HTTP and CLI
+  facility-truth reads for summaries, hours, zones, closure windows, and
+  bounded metadata when `ATHENA_FACILITY_CATALOG_PATH` is set
 - config validation fails fast for invalid adapter and interval settings
 - the identified arrival and departure paths can publish through NATS using
   shared `ashton-proto` helper code
@@ -237,6 +244,11 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
   privacy-safe internal HTTP facility-history surface when
   `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set; there is still no public or
   identity-level operator HTTP surface for that history
+- facility truth is file-backed and internal-only; ATHENA does not invent
+  facility defaults from occupancy, dormant Postgres schema files, or mock-only
+  settings
+- the facility catalog routes stay read-only and avoid derived answers like
+  `is_open_now`, next-slot generation, reservation policy, or sport capability
 - the live browser path is still a narrow Cloudflare quick tunnel in front of a
   proxy that exposes only `/api/v1/edge/tap` and `/api/v1/health`
 - the live cluster proof still uses one bounded node token and one facility
@@ -288,7 +300,7 @@ bullets are only the short summary.
 | Release line | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
 | `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
-| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
+| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads through a validated internal catalog file | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
@@ -307,8 +319,10 @@ bullets are only the short summary.
 | `internal/adapter/` | active adapter interface plus mock and CSV implementations |
 | `internal/edge/` | push-based edge ingress auth, hashing, projection feeding, and HTTP handling |
 | `internal/touchnet/` | raw TouchNet report parsing and replay client |
+| `internal/facility/` | validated facility catalog loading plus read-only facility truth access |
 | `docs/runbooks/source-backed-ingress.md` | local operator path for the first source-backed adapter |
 | `docs/runbooks/edge-ingress.md` | local operator path for push-based edge ingress and raw TouchNet replay |
+| `docs/runbooks/facility-truth.md` | local operator path for the Tracer 18 facility catalog surfaces |
 | `internal/presence/` | canonical occupancy read path plus in-memory live projection |
 | `internal/publish/` | identified visit-lifecycle build and publish flow |
 | `internal/server/` | HTTP routes and health/count handlers |

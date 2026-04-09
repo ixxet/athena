@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/nats-io/nats.go"
@@ -18,6 +19,7 @@ import (
 	"github.com/ixxet/athena/internal/domain"
 	edgeingress "github.com/ixxet/athena/internal/edge"
 	"github.com/ixxet/athena/internal/edgehistory"
+	"github.com/ixxet/athena/internal/facility"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 	"github.com/ixxet/athena/internal/publish"
@@ -64,6 +66,7 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newPresenceCmd())
+	rootCmd.AddCommand(newFacilityCmd())
 	rootCmd.AddCommand(newEdgeCmd())
 
 	return rootCmd
@@ -75,6 +78,10 @@ func newServeCmd() *cobra.Command {
 		Short: "Start the ATHENA HTTP server.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			facilityStore, err := buildFacilityStore(cfg)
 			if err != nil {
 				return err
 			}
@@ -196,6 +203,9 @@ func newServeCmd() *cobra.Command {
 				handlerOpts = append(handlerOpts, server.WithEdgeTapHandler(edgeTapHandler))
 			}
 			handlerOpts = append(handlerOpts, server.WithHistoryPath(cfg.EdgeObservationHistoryPath))
+			if facilityStore != nil {
+				handlerOpts = append(handlerOpts, server.WithFacilityStore(facilityStore))
+			}
 			handler := server.NewHandler(readPath, collector, adapterName, handlerOpts...)
 
 			httpServer := &http.Server{
@@ -377,6 +387,146 @@ func newPresenceCmd() *cobra.Command {
 	return presenceCmd
 }
 
+func newFacilityCmd() *cobra.Command {
+	facilityCmd := &cobra.Command{
+		Use:   "facility",
+		Short: "Query ATHENA facility truth.",
+	}
+
+	var (
+		catalogPath string
+		format      string
+	)
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List facility catalog summaries.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := loadFacilityStore(catalogPath)
+			if err != nil {
+				return err
+			}
+
+			summaries := store.List()
+			switch format {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(map[string]any{
+					"facilities": summaries,
+				})
+			case "text":
+				for _, summary := range summaries {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"facility_id=%s name=%s timezone=%s\n",
+						summary.FacilityID,
+						summary.Name,
+						summary.Timezone,
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", format)
+			}
+		},
+	}
+	listCmd.Flags().StringVar(&catalogPath, "catalog-path", os.Getenv("ATHENA_FACILITY_CATALOG_PATH"), "path to the ATHENA facility catalog file")
+	listCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	facilityCmd.AddCommand(listCmd)
+
+	var facilityID string
+	showCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show one facility detail.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := loadFacilityStore(catalogPath)
+			if err != nil {
+				return err
+			}
+
+			record, ok := store.Facility(facilityID)
+			if !ok {
+				return fmt.Errorf("facility %q not found", strings.TrimSpace(facilityID))
+			}
+
+			switch format {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(record)
+			case "text":
+				if _, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"facility_id=%s name=%s timezone=%s\n",
+					record.FacilityID,
+					record.Name,
+					record.Timezone,
+				); err != nil {
+					return err
+				}
+				for _, hours := range record.Hours {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"hour day=%s opens_at=%s closes_at=%s\n",
+						hours.Day,
+						hours.OpensAt,
+						hours.ClosesAt,
+					); err != nil {
+						return err
+					}
+				}
+				for _, zone := range record.Zones {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"zone zone_id=%s name=%s\n",
+						zone.ZoneID,
+						zone.Name,
+					); err != nil {
+						return err
+					}
+				}
+				for _, closure := range record.ClosureWindows {
+					zoneIDs := strings.Join(closure.ZoneIDs, ",")
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"closure starts_at=%s ends_at=%s code=%s reason=%s zone_ids=%s\n",
+						closure.StartsAt,
+						closure.EndsAt,
+						closure.Code,
+						closure.Reason,
+						zoneIDs,
+					); err != nil {
+						return err
+					}
+				}
+				for _, key := range sortedKeys(record.Metadata) {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"metadata key=%s value=%s\n",
+						key,
+						record.Metadata[key],
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", format)
+			}
+		},
+	}
+	showCmd.Flags().StringVar(&catalogPath, "catalog-path", os.Getenv("ATHENA_FACILITY_CATALOG_PATH"), "path to the ATHENA facility catalog file")
+	showCmd.Flags().StringVar(&facilityID, "facility", "", "facility id to show")
+	showCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = showCmd.MarkFlagRequired("facility")
+	facilityCmd.AddCommand(showCmd)
+
+	return facilityCmd
+}
+
 func newEdgeCmd() *cobra.Command {
 	edgeCmd := &cobra.Command{
 		Use:   "edge",
@@ -545,6 +695,26 @@ func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
 	return application.readPath, application.adapterName, nil
 }
 
+func buildFacilityStore(cfg config.Config) (*facility.Store, error) {
+	if strings.TrimSpace(cfg.FacilityCatalogPath) == "" {
+		return nil, nil
+	}
+
+	return facility.Load(cfg.FacilityCatalogPath)
+}
+
+func loadFacilityStore(path string) (*facility.Store, error) {
+	store, err := facility.Load(path)
+	if err != nil {
+		if errors.Is(err, facility.ErrCatalogNotConfigured) {
+			return nil, fmt.Errorf("ATHENA_FACILITY_CATALOG_PATH or --catalog-path is required")
+		}
+		return nil, err
+	}
+
+	return store, nil
+}
+
 func buildApp(cfg config.Config) (*app, error) {
 	defaultFilter := defaultOccupancyFilter(cfg)
 
@@ -592,4 +762,13 @@ func defaultOccupancyFilter(cfg config.Config) domain.OccupancyFilter {
 		FacilityID: cfg.DefaultFacilityID,
 		ZoneID:     cfg.DefaultZoneID,
 	}
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

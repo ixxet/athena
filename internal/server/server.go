@@ -11,6 +11,7 @@ import (
 
 	"github.com/ixxet/athena/internal/domain"
 	"github.com/ixxet/athena/internal/edgehistory"
+	"github.com/ixxet/athena/internal/facility"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 )
@@ -42,11 +43,16 @@ type historyResponse struct {
 	Observations []historyObservationResponse `json:"observations"`
 }
 
+type facilityListResponse struct {
+	Facilities []facility.Summary `json:"facilities"`
+}
+
 type Option func(*handlerOptions)
 
 type handlerOptions struct {
 	edgeTapHandler http.Handler
 	historyPath    string
+	facilityStore  *facility.Store
 }
 
 func WithEdgeTapHandler(handler http.Handler) Option {
@@ -58,6 +64,12 @@ func WithEdgeTapHandler(handler http.Handler) Option {
 func WithHistoryPath(path string) Option {
 	return func(options *handlerOptions) {
 		options.historyPath = strings.TrimSpace(path)
+	}
+}
+
+func WithFacilityStore(store *facility.Store) Option {
+	return func(options *handlerOptions) {
+		options.facilityStore = store
 	}
 }
 
@@ -164,6 +176,46 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			Until:        until.UTC().Format(time.RFC3339),
 			Observations: payload,
 		})
+	})
+
+	router.Get("/api/v1/facilities", func(w http.ResponseWriter, r *http.Request) {
+		if options.facilityStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "facility catalog is not configured",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, facilityListResponse{
+			Facilities: options.facilityStore.List(),
+		})
+	})
+
+	router.Get("/api/v1/facilities/{facilityID}", func(w http.ResponseWriter, r *http.Request) {
+		if options.facilityStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "facility catalog is not configured",
+			})
+			return
+		}
+
+		facilityID := strings.TrimSpace(chi.URLParam(r, "facilityID"))
+		if facilityID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "facility path parameter is required",
+			})
+			return
+		}
+
+		record, ok := options.facilityStore.Facility(facilityID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "facility not found",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, record)
 	})
 
 	router.Handle("/metrics", promhttp.HandlerFor(collector.Registry(), promhttp.HandlerOpts{}))

@@ -13,6 +13,7 @@ import (
 	"github.com/ixxet/athena/internal/edge"
 	edgeingress "github.com/ixxet/athena/internal/edge"
 	"github.com/ixxet/athena/internal/edgehistory"
+	"github.com/ixxet/athena/internal/facility"
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 )
@@ -284,6 +285,92 @@ func TestPresenceHistoryEndpointRejectsInvalidQueries(t *testing.T) {
 	}
 }
 
+func TestFacilitiesEndpointRequiresConfiguredCatalog(t *testing.T) {
+	handler := testHandler(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/facilities", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "facility catalog is not configured") {
+		t.Fatalf("body = %q, want facility catalog error", recorder.Body.String())
+	}
+}
+
+func TestFacilitiesEndpointReturnsCatalogSummaries(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"mock",
+		WithFacilityStore(testFacilityStore(t)),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/facilities", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "\"facility_id\":\"ashtonbee\"") {
+		t.Fatalf("body = %q, want ashtonbee summary", body)
+	}
+	if !strings.Contains(body, "\"facility_id\":\"morningside\"") {
+		t.Fatalf("body = %q, want morningside summary", body)
+	}
+}
+
+func TestFacilityDetailEndpointReturnsFacilityTruth(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"mock",
+		WithFacilityStore(testFacilityStore(t)),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/facilities/ashtonbee", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "\"timezone\":\"America/Toronto\"") {
+		t.Fatalf("body = %q, want facility timezone", body)
+	}
+	if !strings.Contains(body, "\"zone_id\":\"gym-floor\"") {
+		t.Fatalf("body = %q, want gym-floor zone", body)
+	}
+	if !strings.Contains(body, "\"starts_at\":\"2026-07-01T12:00:00Z\"") {
+		t.Fatalf("body = %q, want UTC-normalized closure start", body)
+	}
+}
+
+func TestFacilityDetailEndpointReturnsNotFoundForUnknownFacility(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"mock",
+		WithFacilityStore(testFacilityStore(t)),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/facilities/missing", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(recorder.Body.String(), "facility not found") {
+		t.Fatalf("body = %q, want facility not found", recorder.Body.String())
+	}
+}
+
 func TestEdgeTapRouteMountsWhenConfigured(t *testing.T) {
 	handler := NewHandler(
 		presence.NewReadPath(
@@ -437,4 +524,58 @@ func TestEdgeTapProjectionKeepsFailObservationOutOfOccupancy(t *testing.T) {
 	if len(publisher.subjects) != 0 {
 		t.Fatalf("len(subjects) = %d, want 0", len(publisher.subjects))
 	}
+}
+
+func testFacilityStore(t *testing.T) *facility.Store {
+	t.Helper()
+
+	store, err := facility.NewStore(facility.Catalog{
+		Facilities: []facility.Facility{
+			{
+				FacilityID: "morningside",
+				Name:       "Morningside",
+				Timezone:   "America/Toronto",
+				Hours: []facility.HoursWindow{
+					{Day: "monday", OpensAt: "06:00", ClosesAt: "22:00"},
+				},
+				Zones: []facility.Zone{
+					{ZoneID: "weight-room", Name: "Weight Room"},
+				},
+				Metadata: map[string]string{
+					"ingress_mode": "touchnet",
+					"surface":      "internal-only",
+				},
+			},
+			{
+				FacilityID: "ashtonbee",
+				Name:       "Ashtonbee",
+				Timezone:   "America/Toronto",
+				Hours: []facility.HoursWindow{
+					{Day: "monday", OpensAt: "06:00", ClosesAt: "22:00"},
+				},
+				Zones: []facility.Zone{
+					{ZoneID: "gym-floor", Name: "Gym Floor"},
+					{ZoneID: "lobby", Name: "Lobby"},
+				},
+				ClosureWindows: []facility.ClosureWindow{
+					{
+						StartsAt: "2026-07-01T08:00:00-04:00",
+						EndsAt:   "2026-07-01T12:00:00-04:00",
+						Code:     "maintenance",
+						Reason:   "Morning maintenance",
+						ZoneIDs:  []string{"gym-floor"},
+					},
+				},
+				Metadata: map[string]string{
+					"ingress_mode": "touchnet",
+					"surface":      "internal-only",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("facility.NewStore() error = %v", err)
+	}
+
+	return store
 }

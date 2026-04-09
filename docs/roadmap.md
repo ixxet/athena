@@ -34,7 +34,7 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | Release line | Intended purpose | Restrictions | What it should not do yet |
 | --- | --- | --- | --- |
 | `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
-| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | build on stable ingress and trusted durable history first | do not widen into social logic or broad product UX |
+| `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads over validated internal catalog files | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
@@ -42,7 +42,7 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | Line | Role | Why it matters |
 | --- | --- | --- |
 | Tracer 17 support follow-up / `v0.5.1` | bounded privacy-safe facility-history support for HERMES reconciliation | lets HERMES consume durable history without private file access or broader ATHENA widening |
-| `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
+| `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth without activating writes, prediction, or shared contract widening |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, and facility truth |
 
 ## Boundaries

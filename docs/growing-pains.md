@@ -219,3 +219,17 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   readability while keeping canonical event timestamps normalized in UTC.
   Rule: separate human-readable runtime log timezone from canonical stored or
   published event time.
+
+## 2026-04-09
+
+- Symptom: the first Tracer 18 sketches drifted toward inventing facility truth
+  from dormant schema files, mock defaults, or ad hoc route structs.
+  Cause: ATHENA already carried `facility_id` and `zone_id` through occupancy
+  and ingress, but it did not yet have a dedicated facility-truth read model,
+  which made it easy to confuse labels with authoritative catalog data.
+  Fix: add a separate validated file-backed facility catalog boundary under
+  `internal/facility/`, wire CLI and internal HTTP reads to that one source,
+  and fail cleanly when the catalog path is not configured.
+  Rule: ATHENA should not invent operational truth from placeholder defaults or
+  dormant storage plans; a new truth slice needs its own explicit validated
+  boundary.

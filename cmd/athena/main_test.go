@@ -131,10 +131,145 @@ func TestEdgeHistoryCommandPrintsRecentDurableObservations(t *testing.T) {
 	}
 }
 
+func TestFacilityListCommandPrintsCatalogSummaries(t *testing.T) {
+	catalogPath := writeFacilityCatalogFixture(t)
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"facility",
+		"list",
+		"--catalog-path", catalogPath,
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "\"facility_id\": \"ashtonbee\"") {
+		t.Fatalf("output = %q, want ashtonbee facility", output)
+	}
+	if !strings.Contains(output, "\"facility_id\": \"morningside\"") {
+		t.Fatalf("output = %q, want morningside facility", output)
+	}
+}
+
+func TestFacilityShowCommandPrintsFacilityDetail(t *testing.T) {
+	catalogPath := writeFacilityCatalogFixture(t)
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"facility",
+		"show",
+		"--catalog-path", catalogPath,
+		"--facility", "ashtonbee",
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "\"zone_id\": \"gym-floor\"") {
+		t.Fatalf("output = %q, want gym-floor zone", output)
+	}
+	if !strings.Contains(output, "\"metadata\": {") {
+		t.Fatalf("output = %q, want metadata payload", output)
+	}
+	if !strings.Contains(output, "\"starts_at\": \"2026-07-01T12:00:00Z\"") {
+		t.Fatalf("output = %q, want UTC-normalized closure start", output)
+	}
+}
+
+func TestFacilityCommandsRequireCatalogPath(t *testing.T) {
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"facility",
+		"list",
+		"--format", "json",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing catalog path error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_FACILITY_CATALOG_PATH") {
+		t.Fatalf("Execute() error = %q, want ATHENA_FACILITY_CATALOG_PATH context", err)
+	}
+}
+
 func writeCSVFixture(t *testing.T, contents string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "presence.csv")
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	return path
+}
+
+func writeFacilityCatalogFixture(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "facilities.json")
+	contents := `{
+  "facilities": [
+    {
+      "facility_id": "morningside",
+      "name": "Morningside",
+      "timezone": "America/Toronto",
+      "hours": [
+        {"day": "tuesday", "opens_at": "06:00", "closes_at": "22:00"},
+        {"day": "monday", "opens_at": "06:00", "closes_at": "22:00"}
+      ],
+      "zones": [
+        {"zone_id": "weight-room", "name": "Weight Room"}
+      ],
+      "metadata": {
+        "ingress_mode": "touchnet",
+        "surface": "internal-only"
+      }
+    },
+    {
+      "facility_id": "ashtonbee",
+      "name": "Ashtonbee",
+      "timezone": "America/Toronto",
+      "hours": [
+        {"day": "monday", "opens_at": "06:00", "closes_at": "22:00"}
+      ],
+      "zones": [
+        {"zone_id": "gym-floor", "name": "Gym Floor"},
+        {"zone_id": "lobby", "name": "Lobby"}
+      ],
+      "closure_windows": [
+        {
+          "starts_at": "2026-07-01T08:00:00-04:00",
+          "ends_at": "2026-07-01T12:00:00-04:00",
+          "code": "maintenance",
+          "reason": "Morning maintenance",
+          "zone_ids": ["gym-floor"]
+        }
+      ],
+      "metadata": {
+        "ingress_mode": "touchnet",
+        "surface": "internal-only"
+      }
+    }
+  ]
+}`
+
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

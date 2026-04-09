@@ -204,3 +204,16 @@ func TestLoadParsesEdgeObservationHistoryPath(t *testing.T) {
 		t.Fatalf("EdgeObservationHistoryPath = %q, want /tmp/athena-edge-history.jsonl", cfg.EdgeObservationHistoryPath)
 	}
 }
+
+func TestLoadParsesFacilityCatalogPath(t *testing.T) {
+	t.Setenv("ATHENA_FACILITY_CATALOG_PATH", "/tmp/athena-facilities.json")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.FacilityCatalogPath != "/tmp/athena-facilities.json" {
+		t.Fatalf("FacilityCatalogPath = %q, want /tmp/athena-facilities.json", cfg.FacilityCatalogPath)
+	}
+}
