@@ -14,6 +14,14 @@ The short answer is:
 - derive analytics and inferred sessions from those observations
 - keep manual overrides and broader operator workflows out of the same slice
 
+Milestone 2.0 update:
+
+- append-only file-backed observation persistence is now real in repo/runtime
+- privacy-safe CLI/internal history reads are now real in repo/runtime
+- replay of committed `pass` observations into a fresh projector is now real in
+  repo/runtime
+- deployed truth still does **not** prove that durable-history line live
+
 The standalone Mermaid source for this planning flow lives at
 [`docs/diagrams/edge-observation-history.mmd`](docs/diagrams/edge-observation-history.mmd).
 
@@ -23,15 +31,18 @@ What ATHENA already does:
 
 - accepts live TouchNet-shaped edge taps through `POST /api/v1/edge/tap`
 - authenticates per-node tokens
-- preserves `pass` and `fail` observations locally
+- preserves `pass` and `fail` observations in an optional append-only
+  file-backed history path
 - updates in-memory live occupancy from accepted `pass` events in explicit
   projection mode
 - publishes safe identified arrival/departure events downstream
+- replays committed `pass` observations from that file-backed history into a
+  fresh projector when the history path is configured
 - keeps downstream payloads on the hashed identity, not the raw account value
 
 What ATHENA does **not** do yet:
 
-- store edge observations durably
+- prove the file-backed durable-history line in deployed truth
 - store occupancy snapshots durably
 - expose query/search APIs over observed edge history
 - infer stay duration beyond current in-memory projection state
@@ -189,13 +200,14 @@ Once append-only storage exists, ATHENA should be able to produce:
 
 Keep this narrow and honest:
 
-1. Add append-only observation persistence in ATHENA.
-2. Add repo-internal CLI/read models over that history first, not public HTTP
-   report surfaces or HERMES APIs.
-3. Add derived session materialization for duration and visit analytics.
-4. Add alias candidates and explicit alias confirmation later.
-5. Add operator review and override workflows only after the history layer is
-   durable and trustworthy.
+1. Keep the existing append-only file-backed persistence and replay proof
+   explicit, bounded, and privacy-safe.
+2. If deployed truth must widen later, roll the existing history path onto a
+   durable volume first instead of jumping straight to a new storage system.
+3. Add richer repo-internal CLI/read models over that history first, not broad
+   public HTTP report surfaces or operator UI.
+4. Add derived session materialization for duration and visit analytics.
+5. Add alias candidates and explicit alias confirmation later.
 
 Do **not** start with:
 
