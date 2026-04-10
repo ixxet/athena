@@ -8,7 +8,8 @@ are earned.
 
 ## Current Line
 
-Current active line: `Tracer 18 / v0.6.0` facility-truth line on `main`.
+Current active working line: `Tracer 18 / v0.6.x` facility-truth line on
+`main`, with the Milestone 2.0 hardening follow-up targeted at `v0.6.1`.
 
 `v0.5.0` remains the Tracer 16 durable-history release line. `v0.5.1` is the
 bounded Tracer 17 support follow-up on that same durable-history branch.
@@ -29,6 +30,9 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
   real for `v0.4.1`
 - optional local file-backed durable history and restart replay groundwork now
   exist behind explicit config
+- the current Milestone 2.0 hardening follow-up adds graceful shutdown,
+  bounded server timeouts, bounded publish retry/backoff, and bounded
+  process-local dedupe memory without widening runtime capability
 - bounded live proof still does not include the durable branch, and broad
   ingress rollout is still unproven
 
@@ -38,6 +42,7 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | --- | --- | --- | --- |
 | `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads over validated internal catalog files | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
+| `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown and publish resilience | keep the line patch-only and non-widening | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
@@ -46,6 +51,7 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | --- | --- | --- |
 | Tracer 17 support follow-up / `v0.5.1` | bounded privacy-safe facility-history support for HERMES reconciliation | lets HERMES consume durable history without private file access or broader ATHENA widening |
 | `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth without activating writes, prediction, or shared contract widening |
+| Milestone 2.0 hardening follow-up / `v0.6.1` | graceful shutdown plus bounded publish resilience on the existing runtime | keeps the current physical-truth line honest before any later diagnostics or prediction widening |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, and facility truth |
 
 ## Boundaries

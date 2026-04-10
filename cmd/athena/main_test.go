@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -209,6 +211,35 @@ func TestFacilityCommandsRequireCatalogPath(t *testing.T) {
 	}
 }
 
+func TestServeCommandShutsDownCleanlyWhenContextIsCanceled(t *testing.T) {
+	addr := reserveListenAddress(t)
+	t.Setenv("ATHENA_HTTP_ADDR", addr)
+	t.Setenv("ATHENA_ADAPTER", "mock")
+
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	command := newServeCmd()
+	command.SetContext(serveCtx)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- command.Execute()
+	}()
+
+	waitForHealthyHTTP(t, fmt.Sprintf("http://%s/api/v1/health", addr))
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve command did not shut down within 10s after context cancellation")
+	}
+}
+
 func writeCSVFixture(t *testing.T, contents string) string {
 	t.Helper()
 
@@ -218,6 +249,36 @@ func writeCSVFixture(t *testing.T, contents string) string {
 	}
 
 	return path
+}
+
+func reserveListenAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	return listener.Addr().String()
+}
+
+func waitForHealthyHTTP(t *testing.T, url string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(url) //nolint:gosec // local integration probe
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("health endpoint %s did not become ready", url)
 }
 
 func writeFacilityCatalogFixture(t *testing.T) string {

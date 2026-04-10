@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
@@ -25,6 +29,14 @@ import (
 	"github.com/ixxet/athena/internal/publish"
 	"github.com/ixxet/athena/internal/server"
 	"github.com/ixxet/athena/internal/touchnet"
+)
+
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 15 * time.Second
+	httpWriteTimeout      = 15 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpShutdownTimeout   = 10 * time.Second
 )
 
 type app struct {
@@ -77,6 +89,9 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the ATHENA HTTP server.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			serveCtx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stopSignals()
+
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -169,7 +184,7 @@ func newServeCmd() *cobra.Command {
 						cfg.IdentifiedPublishInterval,
 					)
 					go func() {
-						if err := worker.Run(cmd.Context()); err != nil {
+						if err := worker.Run(serveCtx); err != nil {
 							slog.Error("identified presence publisher stopped", "error", err)
 						}
 					}()
@@ -209,14 +224,35 @@ func newServeCmd() *cobra.Command {
 			handler := server.NewHandler(readPath, collector, adapterName, handlerOpts...)
 
 			httpServer := &http.Server{
-				Addr:    cfg.HTTPAddr,
-				Handler: handler,
+				Addr:              cfg.HTTPAddr,
+				Handler:           handler,
+				ReadHeaderTimeout: httpReadHeaderTimeout,
+				ReadTimeout:       httpReadTimeout,
+				WriteTimeout:      httpWriteTimeout,
+				IdleTimeout:       httpIdleTimeout,
 			}
 
 			slog.Info("starting ATHENA server", "addr", cfg.HTTPAddr, "adapter", adapterName)
 
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return err
+			serverErrors := make(chan error, 1)
+			go func() {
+				serverErrors <- httpServer.ListenAndServe()
+			}()
+
+			select {
+			case err := <-serverErrors:
+				if err != nil && !errors.Is(err, http.ErrServerClosed) {
+					return err
+				}
+			case <-serveCtx.Done():
+				slog.Info("athena shutdown requested")
+			}
+
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), httpShutdownTimeout)
+			defer cancelShutdown()
+
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				return fmt.Errorf("shutdown ATHENA HTTP server: %w", err)
 			}
 
 			return nil

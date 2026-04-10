@@ -7,9 +7,10 @@ publication path that other repos depend on.
 > Current real slice: mock-backed and CSV-backed presence input for the
 > canonical occupancy read path, push-based edge tap ingress for identified
 > visit lifecycle publication, explicit in-memory edge-driven occupancy
-> projection for `serve`, bounded live browser-reachable deployment of that
-> edge path, and shared `ashton-proto` runtime contracts for arrival and
-> departure events.
+> projection for `serve`, bounded retry/backoff publication with bounded
+> process-local dedupe, bounded live browser-reachable deployment of that edge
+> path, and shared `ashton-proto` runtime contracts for arrival and departure
+> events.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
@@ -83,7 +84,7 @@ flowchart LR
 | Internal durable history read | `athena edge history --history-path ...` | Real, internal-only | Reads recent append-only durable observations through a CLI-only surface over hashed identities |
 | One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
 | One-shot departure publish | `athena presence publish-identified-departures` | Real | Publishes the current identified-departure batch through NATS |
-| Background publish worker | `athena serve` with `ATHENA_NATS_URL` and adapter-backed mode | Real | Dedupes in-process and republishes identified arrivals and departures on a configured interval |
+| Background publish worker | `athena serve` with `ATHENA_NATS_URL` and adapter-backed mode | Real | Dedupes inside a bounded process-local window and retries transient publish failures with bounded backoff on the configured interval |
 | CSV ingress adapter | `ATHENA_ADAPTER=csv` plus `ATHENA_CSV_PATH` | Real | Loads a bounded physical-truth CSV export into the canonical occupancy read model |
 | Prediction endpoints | - | Planned | Preserved in ADRs, not implemented in runtime |
 | Additional real ingress adapters | - | Planned | CSV is the only source-backed adapter today |
@@ -132,13 +133,15 @@ recruitable, or part of a team flow. That intent lives in APOLLO.
 | ATHENA publishes to NATS | Subjects are `athena.identified_presence.arrived` and `athena.identified_presence.departed` |
 | APOLLO consumes the events | Downstream visit open/close stays idempotent and separate from workout or lobby state |
 
-The publish worker keeps a process-local seen set so it does not republish the
-same mock arrivals on every polling interval. In explicit edge-projection mode,
-the live tap path publishes directly from normalized pass events after the
-projection accepts them. When `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set in
-projection mode, ATHENA also replays committed `pass` observations into a fresh
-projector before it starts serving HTTP. Cross-restart publish dedupe is still
-intentionally left to downstream idempotency.
+The publish worker keeps a bounded process-local seen set so it does not
+republish the same mock arrivals on every polling interval, and transient
+publish failures now retry with bounded backoff instead of spinning
+indefinitely. In explicit edge-projection mode, the live tap path publishes
+directly from normalized pass events after the projection accepts them. When
+`ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set in projection mode, ATHENA also
+replays committed `pass` observations into a fresh projector before it starts
+serving HTTP. Cross-restart publish dedupe is still intentionally left to
+downstream idempotency.
 
 ## Edge Observation Note
 
@@ -195,7 +198,7 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 | Container CLI mode | The Docker image now defaults to `athena serve`, so CLI-only container use must override the command explicitly | Default runtime behavior now matches HTTP-service deployments instead of printing help and exiting |
 | Edge ingress logs | Routine edge logs redact raw account values and resolved names, and the optional durable file history does the same | Safer diagnostics and restart groundwork exist now, but there is still no public or operator search surface |
 | Persistence | Append-only file-backed observation history is explicit and optional; Postgres schema files still exist but are not active in runtime | Readers should not assume relational history or snapshot persistence are active just because durable history groundwork now exists |
-| Publish dedupe | Republish protection is process-local | Restart safety currently depends on downstream idempotency more than ATHENA memory |
+| Publish dedupe | Republish protection is bounded and process-local, and worker retries are bounded per cycle | Restart safety still depends on downstream idempotency; durable history is not a publish ledger |
 | Projection mode | Edge-driven occupancy requires an explicit `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config | This tracer changes the occupancy source intentionally, not by config accident |
 | Health and metrics | The surfaces are useful, but still narrower than a mature production service would expose | Good for the tracer, not yet the final observability story |
 
@@ -301,6 +304,7 @@ bullets are only the short summary.
 | --- | --- | --- | --- |
 | `v0.5.1` | bounded privacy-safe facility-history support follow-up on the existing durable-history line | keep the new route facility-filtered, read-only, and subordinate to durable-history truth | do not imply a public operator surface, identity-level reconciliation, or durable-branch deployment |
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads through a validated internal catalog file | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
+| `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown, server bounds, and publish resilience | keep the line patch-only and preserve current live semantics | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
 
 ## Next Ladder Role
@@ -309,6 +313,7 @@ bullets are only the short summary.
 | --- | --- | --- |
 | `v0.5.1` / Tracer 17 support follow-up | bounded privacy-safe facility-history support for HERMES reconciliation | lets HERMES consume durable history without private file access or broader ATHENA widening |
 | `v0.6.0` / `Tracer 18` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
+| `v0.6.1` / Milestone 2.0 hardening follow-up | shutdown, publish retry/backoff, and bounded dedupe memory without a new capability line | keeps the physical-truth runtime honest while deployed truth stays unchanged |
 | later than `v0.6.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, diagnostics, and facility truth are stable |
 
 ## Project Structure
