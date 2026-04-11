@@ -17,6 +17,8 @@ type Config struct {
 	EdgeTokens                  map[string]string
 	EdgeOccupancyProjection     bool
 	EdgeObservationHistoryPath  string
+	EdgePostgresDSN             string
+	EdgeAnalyticsMaxWindow      time.Duration
 	FacilityCatalogPath         string
 	DefaultFacilityID           string
 	DefaultZoneID               string
@@ -50,6 +52,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	analyticsMaxWindow, err := getEnvAsDuration("ATHENA_EDGE_ANALYTICS_MAX_WINDOW", 7*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:                    getEnv("ATHENA_HTTP_ADDR", ":8080"),
 		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
@@ -59,6 +66,8 @@ func Load() (Config, error) {
 		EdgeTokens:                  parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
 		EdgeOccupancyProjection:     edgeProjection,
 		EdgeObservationHistoryPath:  getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
+		EdgePostgresDSN:             getEnv("ATHENA_EDGE_POSTGRES_DSN", ""),
+		EdgeAnalyticsMaxWindow:      analyticsMaxWindow,
 		FacilityCatalogPath:         getEnv("ATHENA_FACILITY_CATALOG_PATH", ""),
 		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
 		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
@@ -79,6 +88,9 @@ func Load() (Config, error) {
 	}
 	if cfg.IdentifiedPublishInterval <= 0 {
 		return Config{}, fmt.Errorf("invalid ATHENA_IDENTIFIED_PUBLISH_INTERVAL %s: value must be > 0", cfg.IdentifiedPublishInterval)
+	}
+	if cfg.EdgeAnalyticsMaxWindow <= 0 {
+		return Config{}, fmt.Errorf("invalid ATHENA_EDGE_ANALYTICS_MAX_WINDOW %s: value must be > 0", cfg.EdgeAnalyticsMaxWindow)
 	}
 	if err := validateEdgeConfig(cfg); err != nil {
 		return Config{}, err
@@ -190,6 +202,9 @@ func parseNodeTokenMap(value string) map[string]string {
 }
 
 func validateEdgeConfig(cfg Config) error {
+	if cfg.EdgePostgresDSN != "" && cfg.EdgeObservationHistoryPath != "" {
+		return fmt.Errorf("ATHENA_EDGE_POSTGRES_DSN and ATHENA_EDGE_OBSERVATION_HISTORY_PATH are mutually exclusive")
+	}
 	if cfg.EdgeOccupancyProjection && cfg.EdgeHashSalt == "" && len(cfg.EdgeTokens) == 0 {
 		return fmt.Errorf("ATHENA_EDGE_OCCUPANCY_PROJECTION requires edge ingress to be enabled")
 	}
