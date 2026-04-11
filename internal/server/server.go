@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,9 +51,11 @@ type facilityListResponse struct {
 type Option func(*handlerOptions)
 
 type handlerOptions struct {
-	edgeTapHandler http.Handler
-	historyPath    string
-	facilityStore  *facility.Store
+	edgeTapHandler     http.Handler
+	historyReader      edgehistory.PublicObservationReader
+	analyticsReader    edgehistory.AnalyticsReader
+	analyticsMaxWindow time.Duration
+	facilityStore      *facility.Store
 }
 
 func WithEdgeTapHandler(handler http.Handler) Option {
@@ -61,9 +64,21 @@ func WithEdgeTapHandler(handler http.Handler) Option {
 	}
 }
 
-func WithHistoryPath(path string) Option {
+func WithHistoryReader(reader edgehistory.PublicObservationReader) Option {
 	return func(options *handlerOptions) {
-		options.historyPath = strings.TrimSpace(path)
+		options.historyReader = reader
+	}
+}
+
+func WithAnalyticsReader(reader edgehistory.AnalyticsReader) Option {
+	return func(options *handlerOptions) {
+		options.analyticsReader = reader
+	}
+}
+
+func WithAnalyticsMaxWindow(limit time.Duration) Option {
+	return func(options *handlerOptions) {
+		options.analyticsMaxWindow = limit
 	}
 }
 
@@ -112,7 +127,7 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 	})
 
 	router.Get("/api/v1/presence/history", func(w http.ResponseWriter, r *http.Request) {
-		if options.historyPath == "" {
+		if options.historyReader == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "edge observation history is not configured",
 			})
@@ -148,7 +163,7 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			return
 		}
 
-		observations, err := edgehistory.ReadPublicObservations(options.historyPath, edgehistory.PublicFilter{
+		observations, err := options.historyReader.ReadPublicObservations(r.Context(), edgehistory.PublicFilter{
 			FacilityID: facilityID,
 			Since:      since,
 			Until:      until,
@@ -176,6 +191,83 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			Until:        until.UTC().Format(time.RFC3339),
 			Observations: payload,
 		})
+	})
+
+	router.Get("/api/v1/presence/analytics", func(w http.ResponseWriter, r *http.Request) {
+		if options.analyticsReader == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "edge analytics are not configured",
+			})
+			return
+		}
+
+		facilityID := strings.TrimSpace(r.URL.Query().Get("facility"))
+		if facilityID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "facility query parameter is required",
+			})
+			return
+		}
+
+		since, err := parseHistoryBoundary(r.URL.Query().Get("since"), "since")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		until, err := parseHistoryBoundary(r.URL.Query().Get("until"), "until")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		if until.Before(since) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "until query parameter must be greater than or equal to since",
+			})
+			return
+		}
+		if options.analyticsMaxWindow > 0 && until.Sub(since) > options.analyticsMaxWindow {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "requested analytics window exceeds configured maximum",
+			})
+			return
+		}
+
+		bucketMinutes, err := parseOptionalPositiveInt(r.URL.Query().Get("bucket_minutes"), "bucket_minutes")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		sessionLimit, err := parseOptionalPositiveInt(r.URL.Query().Get("session_limit"), "session_limit")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		report, err := options.analyticsReader.ReadAnalytics(r.Context(), edgehistory.AnalyticsFilter{
+			FacilityID:   facilityID,
+			ZoneID:       strings.TrimSpace(r.URL.Query().Get("zone")),
+			NodeID:       strings.TrimSpace(r.URL.Query().Get("node")),
+			Since:        since,
+			Until:        until,
+			BucketSize:   time.Duration(bucketMinutes) * time.Minute,
+			SessionLimit: sessionLimit,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, report)
 	})
 
 	router.Get("/api/v1/facilities", func(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +336,23 @@ func parseHistoryBoundary(value, field string) (time.Time, error) {
 	}
 
 	return parsed.UTC(), nil
+}
+
+func parseOptionalPositiveInt(value, field string) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, nil
+	}
+
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, &historyQueryError{message: field + " query parameter must be an integer"}
+	}
+	if parsed <= 0 {
+		return 0, &historyQueryError{message: field + " query parameter must be greater than 0"}
+	}
+
+	return parsed, nil
 }
 
 type historyQueryError struct {

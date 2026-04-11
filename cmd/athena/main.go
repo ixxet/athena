@@ -45,6 +45,16 @@ type app struct {
 	adapterName string
 }
 
+type edgeRuntime struct {
+	backend         string
+	recorder        edgeingress.ObservationRecorder
+	replayReader    edgehistory.ReplayReader
+	historyReader   edgehistory.PublicObservationReader
+	recentReader    edgehistory.RecentObservationReader
+	analyticsReader edgehistory.AnalyticsReader
+	close           func()
+}
+
 var newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
 	if cfg.NATSURL == "" {
 		return nil, nil, fmt.Errorf("ATHENA_NATS_URL is required")
@@ -107,14 +117,13 @@ func newServeCmd() *cobra.Command {
 				publisher      publish.Publisher
 				closePublisher func() error
 				edgeTapHandler http.Handler
-				historyStore   *edgehistory.FileStore
+				edgeStores     edgeRuntime
 			)
-			if cfg.EdgeObservationHistoryPath != "" {
-				historyStore, err = edgehistory.NewFileStore(cfg.EdgeObservationHistoryPath)
-				if err != nil {
-					return err
-				}
+			edgeStores, err = openEdgeRuntime(serveCtx, cfg)
+			if err != nil {
+				return err
 			}
+			defer edgeStores.close()
 			if cfg.EdgeOccupancyProjection {
 				publisher, closePublisher, err = newPublisherHandle(cfg)
 				if err != nil {
@@ -123,14 +132,18 @@ func newServeCmd() *cobra.Command {
 				defer closePublisher()
 
 				projector := presence.NewProjector()
-				if historyStore != nil {
-					replay, err := edgehistory.ReplayFile(historyStore.Path(), projector)
+				if edgeStores.replayReader != nil {
+					records, err := edgeStores.replayReader.ReadAll(serveCtx)
+					if err != nil {
+						return fmt.Errorf("load edge observation history for replay: %w", err)
+					}
+					replay, err := edgehistory.ReplayProjector(projector, records)
 					if err != nil {
 						return fmt.Errorf("rebuild edge occupancy projection from history: %w", err)
 					}
 					slog.Info(
 						"edge observation history replayed",
-						"path", historyStore.Path(),
+						"storage_backend", edgeStores.backend,
 						"observations_total", replay.Total,
 						"pass_total", replay.Pass,
 						"fail_total", replay.Fail,
@@ -144,8 +157,8 @@ func newServeCmd() *cobra.Command {
 				edgeOpts := []edgeingress.Option{
 					edgeingress.WithProjection(projector),
 				}
-				if historyStore != nil {
-					edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(historyStore))
+				if edgeStores.recorder != nil {
+					edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(edgeStores.recorder))
 				}
 				edgeService, err := edgeingress.NewService(
 					publisher,
@@ -160,7 +173,7 @@ func newServeCmd() *cobra.Command {
 				slog.Info(
 					"edge occupancy projection enabled",
 					"occupancy_source", "edge-projection",
-					"history_path", cfg.EdgeObservationHistoryPath,
+					"storage_backend", edgeStores.backend,
 					"node_count", len(cfg.EdgeTokens),
 				)
 			} else {
@@ -200,24 +213,30 @@ func newServeCmd() *cobra.Command {
 
 				if cfg.EdgeHashSalt != "" || len(cfg.EdgeTokens) > 0 {
 					edgeOpts := make([]edgeingress.Option, 0, 1)
-					if historyStore != nil {
-						edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(historyStore))
+					if edgeStores.recorder != nil {
+						edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(edgeStores.recorder))
 					}
 					edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens, edgeOpts...)
 					if err != nil {
 						return err
 					}
 					edgeTapHandler = edgeingress.NewHandler(edgeService)
-					slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens), "history_path", cfg.EdgeObservationHistoryPath)
+					slog.Info("edge tap ingress enabled", "node_count", len(cfg.EdgeTokens), "storage_backend", edgeStores.backend)
 				}
 			}
 
 			collector := metrics.New(readPath)
-			handlerOpts := make([]server.Option, 0, 1)
+			handlerOpts := make([]server.Option, 0, 4)
 			if edgeTapHandler != nil {
 				handlerOpts = append(handlerOpts, server.WithEdgeTapHandler(edgeTapHandler))
 			}
-			handlerOpts = append(handlerOpts, server.WithHistoryPath(cfg.EdgeObservationHistoryPath))
+			if edgeStores.historyReader != nil {
+				handlerOpts = append(handlerOpts, server.WithHistoryReader(edgeStores.historyReader))
+			}
+			if edgeStores.analyticsReader != nil {
+				handlerOpts = append(handlerOpts, server.WithAnalyticsReader(edgeStores.analyticsReader))
+				handlerOpts = append(handlerOpts, server.WithAnalyticsMaxWindow(cfg.EdgeAnalyticsMaxWindow))
+			}
 			if facilityStore != nil {
 				handlerOpts = append(handlerOpts, server.WithFacilityStore(facilityStore))
 			}
@@ -663,9 +682,10 @@ func newEdgeCmd() *cobra.Command {
 	edgeCmd.AddCommand(replayCmd)
 
 	var (
-		historyPath   string
-		historyLimit  int
-		historyFormat string
+		historyPath        string
+		historyPostgresDSN string
+		historyLimit       int
+		historyFormat      string
 	)
 
 	historyCmd := &cobra.Command{
@@ -675,12 +695,13 @@ func newEdgeCmd() *cobra.Command {
 			if historyLimit <= 0 {
 				return fmt.Errorf("--limit must be > 0")
 			}
-			trimmedPath := strings.TrimSpace(historyPath)
-			if trimmedPath == "" {
-				return fmt.Errorf("--history-path is required")
+			reader, closeReader, err := openEdgeHistoryReader(cmd.Context(), historyPath, historyPostgresDSN)
+			if err != nil {
+				return err
 			}
+			defer closeReader()
 
-			records, err := edgehistory.ReadRecent(trimmedPath, historyLimit)
+			records, err := reader.ReadRecent(cmd.Context(), historyLimit)
 			if err != nil {
 				return err
 			}
@@ -715,10 +736,134 @@ func newEdgeCmd() *cobra.Command {
 		},
 	}
 	historyCmd.Flags().StringVar(&historyPath, "history-path", os.Getenv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH"), "path to the durable edge observation history file")
+	historyCmd.Flags().StringVar(&historyPostgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge observation store")
 	historyCmd.Flags().IntVar(&historyLimit, "limit", 20, "maximum number of recent observations to print")
 	historyCmd.Flags().StringVar(&historyFormat, "format", "text", "output format: text or json")
 
 	edgeCmd.AddCommand(historyCmd)
+
+	var (
+		analyticsPostgresDSN  string
+		analyticsFacilityID   string
+		analyticsZoneID       string
+		analyticsNodeID       string
+		analyticsSince        string
+		analyticsUntil        string
+		analyticsBucket       int
+		analyticsSessionLimit int
+		analyticsFormat       string
+	)
+
+	analyticsCmd := &cobra.Command{
+		Use:   "analytics",
+		Short: "Read bounded edge analytics from the Postgres observation store.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), analyticsPostgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			since, err := parseRFC3339Value(analyticsSince, "--since")
+			if err != nil {
+				return err
+			}
+			until, err := parseRFC3339Value(analyticsUntil, "--until")
+			if err != nil {
+				return err
+			}
+
+			report, err := store.ReadAnalytics(cmd.Context(), edgehistory.AnalyticsFilter{
+				FacilityID:   analyticsFacilityID,
+				ZoneID:       analyticsZoneID,
+				NodeID:       analyticsNodeID,
+				Since:        since,
+				Until:        until,
+				BucketSize:   time.Duration(analyticsBucket) * time.Minute,
+				SessionLimit: analyticsSessionLimit,
+			})
+			if err != nil {
+				return err
+			}
+
+			switch analyticsFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(report)
+			case "text":
+				if _, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"facility=%s zone=%s node=%s since=%s until=%s total=%d pass=%d fail=%d committed_pass=%d open_sessions=%d closed_sessions=%d unmatched_exit=%d unique_visitors=%d occupancy_at_end=%d average_duration_seconds=%d median_duration_seconds=%d\n",
+					report.FacilityID,
+					report.ZoneID,
+					report.NodeID,
+					report.Since.Format(time.RFC3339),
+					report.Until.Format(time.RFC3339),
+					report.ObservationSummary.Total,
+					report.ObservationSummary.Pass,
+					report.ObservationSummary.Fail,
+					report.ObservationSummary.CommittedPass,
+					report.SessionSummary.OpenCount,
+					report.SessionSummary.ClosedCount,
+					report.SessionSummary.UnmatchedExitCount,
+					report.SessionSummary.UniqueVisitors,
+					report.SessionSummary.OccupancyAtEnd,
+					report.SessionSummary.AverageDurationSeconds,
+					report.SessionSummary.MedianDurationSeconds,
+				); err != nil {
+					return err
+				}
+				for _, bucket := range report.FlowBuckets {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"bucket started_at=%s ended_at=%s pass_in=%d pass_out=%d fail_in=%d fail_out=%d occupancy_end=%d\n",
+						bucket.StartedAt.Format(time.RFC3339),
+						bucket.EndedAt.Format(time.RFC3339),
+						bucket.PassIn,
+						bucket.PassOut,
+						bucket.FailIn,
+						bucket.FailOut,
+						bucket.OccupancyEnd,
+					); err != nil {
+						return err
+					}
+				}
+				for _, session := range report.Sessions {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"session session_id=%s state=%s entry_node_id=%s entry_at=%s exit_node_id=%s exit_at=%s duration_seconds=%s\n",
+						session.SessionID,
+						session.State,
+						session.EntryNodeID,
+						formatOptionalTime(session.EntryAt),
+						session.ExitNodeID,
+						formatOptionalTime(session.ExitAt),
+						formatOptionalInt64(session.DurationSeconds),
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", analyticsFormat)
+			}
+		},
+	}
+	analyticsCmd.Flags().StringVar(&analyticsPostgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge observation store")
+	analyticsCmd.Flags().StringVar(&analyticsFacilityID, "facility", "", "facility id to query")
+	analyticsCmd.Flags().StringVar(&analyticsZoneID, "zone", "", "optional zone id to query")
+	analyticsCmd.Flags().StringVar(&analyticsNodeID, "node", "", "optional node id to query")
+	analyticsCmd.Flags().StringVar(&analyticsSince, "since", "", "inclusive RFC3339 lower bound")
+	analyticsCmd.Flags().StringVar(&analyticsUntil, "until", "", "inclusive RFC3339 upper bound")
+	analyticsCmd.Flags().IntVar(&analyticsBucket, "bucket-minutes", 15, "bucket size in minutes")
+	analyticsCmd.Flags().IntVar(&analyticsSessionLimit, "session-limit", 20, "maximum number of recent session facts to print")
+	analyticsCmd.Flags().StringVar(&analyticsFormat, "format", "text", "output format: text or json")
+	_ = analyticsCmd.MarkFlagRequired("facility")
+	_ = analyticsCmd.MarkFlagRequired("since")
+	_ = analyticsCmd.MarkFlagRequired("until")
+
+	edgeCmd.AddCommand(analyticsCmd)
 	return edgeCmd
 }
 
@@ -807,4 +952,86 @@ func sortedKeys(values map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func openEdgeRuntime(ctx context.Context, cfg config.Config) (edgeRuntime, error) {
+	switch {
+	case strings.TrimSpace(cfg.EdgePostgresDSN) != "":
+		store, err := edgehistory.NewPostgresStore(ctx, cfg.EdgePostgresDSN)
+		if err != nil {
+			return edgeRuntime{}, err
+		}
+		return edgeRuntime{
+			backend:         "postgres",
+			recorder:        store,
+			replayReader:    store,
+			historyReader:   store,
+			recentReader:    store,
+			analyticsReader: store,
+			close:           store.Close,
+		}, nil
+	case strings.TrimSpace(cfg.EdgeObservationHistoryPath) != "":
+		store, err := edgehistory.NewFileStore(cfg.EdgeObservationHistoryPath)
+		if err != nil {
+			return edgeRuntime{}, err
+		}
+		return edgeRuntime{
+			backend:       "file",
+			recorder:      store,
+			replayReader:  store,
+			historyReader: store,
+			recentReader:  store,
+			close:         func() {},
+		}, nil
+	default:
+		return edgeRuntime{
+			backend: "disabled",
+			close:   func() {},
+		}, nil
+	}
+}
+
+func openEdgeHistoryReader(ctx context.Context, historyPath, postgresDSN string) (edgehistory.RecentObservationReader, func(), error) {
+	trimmedPath := strings.TrimSpace(historyPath)
+	trimmedDSN := strings.TrimSpace(postgresDSN)
+	if trimmedPath != "" && trimmedDSN != "" {
+		return nil, nil, fmt.Errorf("--history-path and --postgres-dsn are mutually exclusive")
+	}
+	if trimmedDSN != "" {
+		store, err := edgehistory.NewPostgresStore(ctx, trimmedDSN)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, store.Close, nil
+	}
+	if trimmedPath == "" {
+		return nil, nil, fmt.Errorf("--history-path or --postgres-dsn is required")
+	}
+	store, err := edgehistory.NewFileStore(trimmedPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() {}, nil
+}
+
+func parseRFC3339Value(value, name string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be RFC3339: %w", name, err)
+	}
+	return parsed.UTC(), nil
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func formatOptionalInt64(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *value)
 }
