@@ -14,13 +14,18 @@ The short answer is:
 - derive analytics and inferred sessions from those observations
 - keep manual overrides and broader operator workflows out of the same slice
 
-Milestone 2.0 update:
+Phase 3 shared substrate A update:
 
-- append-only file-backed observation persistence is now real in repo/runtime
-- privacy-safe CLI/internal history reads are now real in repo/runtime
-- replay of committed `pass` observations into a fresh projector is now real in
+- append-only Postgres-backed observation persistence is now real in
   repo/runtime
-- deployed truth still does **not** prove that durable-history line live
+- derived `open`, `closed`, and `unmatched_exit` session facts are now real in
+  repo/runtime
+- privacy-safe CLI/internal history reads plus one bounded internal analytics
+  read are now real in repo/runtime
+- replay of committed `pass` observations into a fresh projector is now real in
+  repo/runtime from the configured durable store
+- deployed truth still does **not** prove that the Postgres-backed durable
+  branch live
 
 The standalone Mermaid source for this planning flow lives at
 [`docs/diagrams/edge-observation-history.mmd`](docs/diagrams/edge-observation-history.mmd).
@@ -31,22 +36,28 @@ What ATHENA already does:
 
 - accepts live TouchNet-shaped edge taps through `POST /api/v1/edge/tap`
 - authenticates per-node tokens
-- preserves `pass` and `fail` observations in an optional append-only
-  file-backed history path
+- preserves `pass` and `fail` observations in an append-only Postgres-backed
+  history path when configured
 - updates in-memory live occupancy from accepted `pass` events in explicit
   projection mode
 - publishes safe identified arrival/departure events downstream
-- replays committed `pass` observations from that file-backed history into a
-  fresh projector when the history path is configured
+- derives `open`, `closed`, and `unmatched_exit` session facts from accepted
+  `pass` events
+- exposes one bounded internal analytics read over facility, zone, node, and
+  time window
+- replays committed `pass` observations from the configured durable store into
+  a fresh projector when durable history is configured
 - keeps downstream payloads on the hashed identity, not the raw account value
+- keeps the older file-backed history path only as an explicit local/runtime
+  fallback when Postgres is not configured
 
 What ATHENA does **not** do yet:
 
-- prove the file-backed durable-history line in deployed truth
+- prove the Postgres-backed durable-history line in deployed truth
 - store occupancy snapshots durably
 - expose query/search APIs over observed edge history
-- infer stay duration beyond current in-memory projection state
 - reconcile student-number aliases and RFID aliases into a canonical person
+- widen into booking, public dashboards, or AI summary surfaces
 
 That means the next storage slice is not about inventing new runtime truth. It
 is about preserving the truth ATHENA already sees.
@@ -77,22 +88,21 @@ not yet override workflow, staffing workflow, or member-intent questions.
 The first durable slice should be one immutable table for every observed edge
 attempt, including both `pass` and `fail`.
 
-Recommended fields:
+Current runtime fields:
 
+- `observation_id`
 - `event_id`
 - `facility_id`
 - `zone_id`
 - `node_id`
 - `direction`
 - `result`
+- `source`
 - `observed_at`
-- `recorded_at`
+- `stored_at`
 - `account_type`
-- `name`
-- `status_message`
+- `name_present`
 - `external_identity_hash`
-- `account_raw_ciphertext` or other restricted reversible storage
-- `raw_payload_json`
 - `created_at`
 
 Recommended rules:
@@ -101,32 +111,36 @@ Recommended rules:
 - the row is never updated after write
 - both `pass` and `fail` are stored
 - the hashed identity is always stored
-- raw account values remain restricted to ATHENA-owned storage and should not
-  leak into downstream publish payloads
+- raw account values, resolved names, and free-text `status_message` stay out
+  of the durable row and out of downstream publish payloads
+- commit truth stays separate in an append-only `edge_observation_commits`
+  table so accepted `pass` events remain explicit
 
 ### 2. Derived session facts, not handwritten occupancy history
 
 The next thing to derive is not a mutable occupancy ledger. It is an inferred
 session layer built from accepted `pass` events.
 
-Recommended derived shape:
+Current runtime shape:
 
 - `session_id`
 - `external_identity_hash`
 - `facility_id`
 - `zone_id`
+- `entry_node_id`
 - `entry_event_id`
 - `entry_at`
+- `exit_node_id`
 - `exit_event_id`
 - `exit_at`
 - `duration_seconds`
-- `session_state` such as `open`, `closed`, `unmatched_exit`, `stale`
+- `session_state` as `open`, `closed`, or `unmatched_exit`
 - `created_at`
 - `updated_at`
 
 Rules:
 
-- derive sessions from accepted pass events only
+- derive sessions from accepted `pass` events only
 - never rewrite the original observation history
 - treat unmatched `out` and unmatched `in` as explicit analytic states, not as
   silent data loss
@@ -200,12 +214,11 @@ Once append-only storage exists, ATHENA should be able to produce:
 
 Keep this narrow and honest:
 
-1. Keep the existing append-only file-backed persistence and replay proof
-   explicit, bounded, and privacy-safe.
-2. If deployed truth must widen later, roll the existing history path onto a
-   durable volume first instead of jumping straight to a new storage system.
-3. Add richer repo-internal CLI/read models over that history first, not broad
-   public HTTP report surfaces or operator UI.
+1. Keep append-only observation persistence explicit, bounded, and privacy-safe.
+2. Keep accepted-pass commit truth explicit instead of inferring it from all
+   `pass` rows.
+3. Add richer repo-internal CLI/read models over durable history first, not
+   broad public HTTP report surfaces or operator UI.
 4. Add derived session materialization for duration and visit analytics.
 5. Add alias candidates and explicit alias confirmation later.
 

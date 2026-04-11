@@ -233,3 +233,20 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   Rule: ATHENA should not invent operational truth from placeholder defaults or
   dormant storage plans; a new truth slice needs its own explicit validated
   boundary.
+
+## 2026-04-10
+
+- Symptom: the dormant `001_initial` Postgres schema looked tempting as the
+  starting point for durable edge history even though it modeled generic
+  `presence_events` instead of the current immutable observation and
+  accepted-pass commit truth.
+  Cause: the repo had authored relational groundwork before the edge-history
+  runtime semantics were honest enough to settle, so the first schema no longer
+  matched the append-only observation plus derived-session model that ATHENA
+  actually needed.
+  Fix: leave `001_initial` in place as dormant history, add a new migration line
+  for `edge_observations`, `edge_observation_commits`, and `edge_sessions`, and
+  wire runtime reads/writes only to the newer schema.
+  Rule: when a dormant storage sketch no longer matches settled runtime truth,
+  supersede it explicitly instead of quietly stretching it until the semantics
+  become ambiguous.
