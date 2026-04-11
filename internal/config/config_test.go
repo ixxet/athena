@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRejectsInvalidAdapter(t *testing.T) {
@@ -50,6 +51,18 @@ func TestLoadRejectsInvalidEdgeOccupancyProjectionFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ATHENA_EDGE_OCCUPANCY_PROJECTION") {
 		t.Fatalf("Load() error = %q, want ATHENA_EDGE_OCCUPANCY_PROJECTION context", err)
+	}
+}
+
+func TestLoadRejectsInvalidEdgeAnalyticsMaxWindow(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_ANALYTICS_MAX_WINDOW", "soon")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid analytics max window error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_ANALYTICS_MAX_WINDOW") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_ANALYTICS_MAX_WINDOW context", err)
 	}
 }
 
@@ -202,6 +215,36 @@ func TestLoadParsesEdgeObservationHistoryPath(t *testing.T) {
 
 	if cfg.EdgeObservationHistoryPath != "/tmp/athena-edge-history.jsonl" {
 		t.Fatalf("EdgeObservationHistoryPath = %q, want /tmp/athena-edge-history.jsonl", cfg.EdgeObservationHistoryPath)
+	}
+}
+
+func TestLoadParsesEdgePostgresConfig(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_POSTGRES_DSN", "postgres://athena:secret@127.0.0.1:5432/athena?sslmode=disable")
+	t.Setenv("ATHENA_EDGE_ANALYTICS_MAX_WINDOW", "96h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.EdgePostgresDSN != "postgres://athena:secret@127.0.0.1:5432/athena?sslmode=disable" {
+		t.Fatalf("EdgePostgresDSN = %q, want configured dsn", cfg.EdgePostgresDSN)
+	}
+	if cfg.EdgeAnalyticsMaxWindow != 96*time.Hour {
+		t.Fatalf("EdgeAnalyticsMaxWindow = %s, want 96h", cfg.EdgeAnalyticsMaxWindow)
+	}
+}
+
+func TestLoadRejectsMixedEdgeHistoryBackends(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_POSTGRES_DSN", "postgres://athena:secret@127.0.0.1:5432/athena?sslmode=disable")
+	t.Setenv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", "/tmp/athena-edge-history.jsonl")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want mixed backend error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("Load() error = %q, want mutually exclusive context", err)
 	}
 }
 

@@ -23,10 +23,19 @@ type serverStubPublisher struct {
 	payloads [][]byte
 }
 
+type serverStubAnalyticsReader struct {
+	report edgehistory.AnalyticsReport
+	err    error
+}
+
 func (s *serverStubPublisher) Publish(_ context.Context, subject string, payload []byte) error {
 	s.subjects = append(s.subjects, subject)
 	s.payloads = append(s.payloads, payload)
 	return nil
+}
+
+func (s *serverStubAnalyticsReader) ReadAnalytics(_ context.Context, _ edgehistory.AnalyticsFilter) (edgehistory.AnalyticsReport, error) {
+	return s.report, s.err
 }
 
 func testHandler(t *testing.T) http.Handler {
@@ -173,7 +182,7 @@ func TestPresenceHistoryEndpointReturnsSanitizedFacilityHistory(t *testing.T) {
 		metrics.New(readPath),
 		"edge-projection",
 		WithEdgeTapHandler(edgeingress.NewHandler(edgeService)),
-		WithHistoryPath(historyPath),
+		WithHistoryReader(historyStore),
 	)
 
 	pass := httptest.NewRequest(http.MethodPost, "/api/v1/edge/tap", strings.NewReader(`{
@@ -265,7 +274,7 @@ func TestPresenceHistoryEndpointRejectsInvalidQueries(t *testing.T) {
 		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
 		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
 		"edge-projection",
-		WithHistoryPath(historyPath),
+		WithHistoryReader(historyStore),
 	)
 
 	testCases := []string{
@@ -273,6 +282,111 @@ func TestPresenceHistoryEndpointRejectsInvalidQueries(t *testing.T) {
 		"/api/v1/presence/history?facility=ashtonbee&until=2026-04-09T13:00:00Z",
 		"/api/v1/presence/history?facility=ashtonbee&since=bad-time&until=2026-04-09T13:00:00Z",
 		"/api/v1/presence/history?facility=ashtonbee&since=2026-04-09T13:00:00Z&until=2026-04-09T11:00:00Z",
+	}
+
+	for _, target := range testCases {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("target %s status = %d, want %d", target, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestPresenceAnalyticsEndpointRequiresConfiguredAnalytics(t *testing.T) {
+	handler := testHandler(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/analytics?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "analytics are not configured") {
+		t.Fatalf("body = %q, want missing analytics error", recorder.Body.String())
+	}
+}
+
+func TestPresenceAnalyticsEndpointReturnsBoundedReport(t *testing.T) {
+	report := edgehistory.AnalyticsReport{
+		FacilityID:    "ashtonbee",
+		ZoneID:        "gym-floor",
+		NodeID:        "entry-node",
+		Since:         time.Date(2026, 4, 9, 11, 0, 0, 0, time.UTC),
+		Until:         time.Date(2026, 4, 9, 13, 0, 0, 0, time.UTC),
+		BucketMinutes: 15,
+		ObservationSummary: edgehistory.ObservationSummary{
+			Total:         3,
+			Pass:          2,
+			Fail:          1,
+			CommittedPass: 2,
+		},
+		SessionSummary: edgehistory.SessionSummary{
+			ClosedCount:            1,
+			UniqueVisitors:         1,
+			AverageDurationSeconds: 300,
+			MedianDurationSeconds:  300,
+			OccupancyAtEnd:         0,
+		},
+		FlowBuckets: []edgehistory.FlowBucket{{
+			StartedAt:    time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC),
+			EndedAt:      time.Date(2026, 4, 9, 12, 15, 0, 0, time.UTC),
+			PassIn:       1,
+			PassOut:      0,
+			FailIn:       0,
+			FailOut:      0,
+			OccupancyEnd: 1,
+		}},
+		Sessions: []edgehistory.SessionFact{{
+			SessionID: "session-001",
+			State:     "closed",
+		}},
+	}
+
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithAnalyticsReader(&serverStubAnalyticsReader{report: report}),
+		WithAnalyticsMaxWindow(24*time.Hour),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/analytics?facility=ashtonbee&zone=gym-floor&node=entry-node&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&bucket_minutes=15&session_limit=5", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "\"facility_id\":\"ashtonbee\"") {
+		t.Fatalf("body = %q, want facility_id", body)
+	}
+	if !strings.Contains(body, "\"committed_pass\":2") {
+		t.Fatalf("body = %q, want committed_pass summary", body)
+	}
+	if !strings.Contains(body, "\"session_id\":\"session-001\"") {
+		t.Fatalf("body = %q, want session fact", body)
+	}
+}
+
+func TestPresenceAnalyticsEndpointRejectsInvalidQueries(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithAnalyticsReader(&serverStubAnalyticsReader{}),
+		WithAnalyticsMaxWindow(2*time.Hour),
+	)
+
+	testCases := []string{
+		"/api/v1/presence/analytics?since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/analytics?facility=ashtonbee&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/analytics?facility=ashtonbee&since=bad-time&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/analytics?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T14:00:01Z",
+		"/api/v1/presence/analytics?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&bucket_minutes=0",
 	}
 
 	for _, target := range testCases {
