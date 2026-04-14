@@ -20,6 +20,13 @@ type ProjectionResult struct {
 	Reason  string
 }
 
+type ProjectionMarker struct {
+	RecordedAt time.Time
+	EventID    string
+}
+
+type ProjectionMarkerResolver func(context.Context, domain.PresenceEvent) (ProjectionMarker, bool, error)
+
 type ProjectorOption func(*Projector)
 
 type Projector struct {
@@ -27,6 +34,7 @@ type Projector struct {
 	now                 Clock
 	absentRetention     time.Duration
 	maxAbsentIdentities int
+	markerResolver      ProjectionMarkerResolver
 	identities          map[identityKey]identityState
 	aggregates          map[aggregateKey]aggregateState
 }
@@ -71,6 +79,12 @@ func WithMaxAbsentIdentities(limit int) ProjectorOption {
 	}
 }
 
+func WithProjectionMarkerResolver(resolver ProjectionMarkerResolver) ProjectorOption {
+	return func(projector *Projector) {
+		projector.markerResolver = resolver
+	}
+}
+
 func NewProjector(opts ...ProjectorOption) *Projector {
 	return NewProjectorWithClock(nil, opts...)
 }
@@ -104,10 +118,13 @@ func NewProjectorWithClock(now Clock, opts ...ProjectorOption) *Projector {
 }
 
 func (p *Projector) Apply(event domain.PresenceEvent) (ProjectionResult, error) {
-	return p.ApplyWithEffect(event, nil)
+	return p.ApplyWithEffect(nil, event, nil)
 }
 
-func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() error) (ProjectionResult, error) {
+func (p *Projector) ApplyWithEffect(ctx context.Context, event domain.PresenceEvent, onApply func() error) (ProjectionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if event.ID == "" {
 		return ProjectionResult{}, fmt.Errorf("event id is required")
 	}
@@ -135,11 +152,26 @@ func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() e
 	defer p.mu.Unlock()
 
 	current, exists := p.identities[key]
-	switch compareEventOrder(recordedAt, event.ID, current.LastRecordedAt.UTC(), current.LastEventID) {
-	case -1:
-		return ProjectionResult{Applied: false, Reason: "stale"}, nil
-	case 0:
-		return ProjectionResult{Applied: false, Reason: "duplicate"}, nil
+	if exists {
+		switch compareEventOrder(recordedAt, event.ID, current.LastRecordedAt.UTC(), current.LastEventID) {
+		case -1:
+			return ProjectionResult{Applied: false, Reason: "stale"}, nil
+		case 0:
+			return ProjectionResult{Applied: false, Reason: "duplicate"}, nil
+		}
+	} else if p.markerResolver != nil {
+		marker, found, err := p.markerResolver(ctx, event)
+		if err != nil {
+			return ProjectionResult{}, err
+		}
+		if found {
+			switch compareEventOrder(recordedAt, event.ID, marker.RecordedAt.UTC(), marker.EventID) {
+			case -1:
+				return ProjectionResult{Applied: false, Reason: "stale"}, nil
+			case 0:
+				return ProjectionResult{Applied: false, Reason: "duplicate"}, nil
+			}
+		}
 	}
 
 	switch event.Direction {

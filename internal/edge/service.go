@@ -69,7 +69,7 @@ type Service struct {
 
 type ProjectionApplier interface {
 	Apply(domain.PresenceEvent) (presence.ProjectionResult, error)
-	ApplyWithEffect(domain.PresenceEvent, func() error) (presence.ProjectionResult, error)
+	ApplyWithEffect(context.Context, domain.PresenceEvent, func() error) (presence.ProjectionResult, error)
 }
 
 type ObservationRecorder interface {
@@ -151,7 +151,7 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 			return AcceptedTap{}, &ValidationError{message: "identified presence event is missing an external identity hash"}
 		}
 
-		projection, err := s.projector.ApplyWithEffect(observed.event, func() error {
+		projection, err := s.projector.ApplyWithEffect(ctx, observed.event, func() error {
 			if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
 				return fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
 			}

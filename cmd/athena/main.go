@@ -48,6 +48,7 @@ type app struct {
 type edgeRuntime struct {
 	backend         string
 	recorder        edgeingress.ObservationRecorder
+	markerReader    edgehistory.MarkerReader
 	replayReader    edgehistory.ReplayReader
 	historyReader   edgehistory.PublicObservationReader
 	recentReader    edgehistory.RecentObservationReader
@@ -134,6 +135,7 @@ func newServeCmd() *cobra.Command {
 				projector := presence.NewProjector(
 					presence.WithAbsentIdentityRetention(cfg.EdgeProjectorAbsentRetention),
 					presence.WithMaxAbsentIdentities(cfg.EdgeProjectorMaxAbsentIdentities),
+					presence.WithProjectionMarkerResolver(buildProjectionMarkerResolver(edgeStores.markerReader)),
 				)
 				if edgeStores.replayReader != nil {
 					records, err := edgeStores.replayReader.ReadAll(serveCtx)
@@ -967,6 +969,7 @@ func openEdgeRuntime(ctx context.Context, cfg config.Config) (edgeRuntime, error
 		return edgeRuntime{
 			backend:         "postgres",
 			recorder:        store,
+			markerReader:    store,
 			replayReader:    store,
 			historyReader:   store,
 			recentReader:    store,
@@ -981,6 +984,7 @@ func openEdgeRuntime(ctx context.Context, cfg config.Config) (edgeRuntime, error
 		return edgeRuntime{
 			backend:       "file",
 			recorder:      store,
+			markerReader:  store,
 			replayReader:  store,
 			historyReader: store,
 			recentReader:  store,
@@ -1015,6 +1019,31 @@ func openEdgeHistoryReader(ctx context.Context, historyPath, postgresDSN string)
 		return nil, nil, err
 	}
 	return store, func() {}, nil
+}
+
+func buildProjectionMarkerResolver(reader edgehistory.MarkerReader) presence.ProjectionMarkerResolver {
+	if reader == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, event domain.PresenceEvent) (presence.ProjectionMarker, bool, error) {
+		marker, found, err := reader.ReadMarker(ctx, edgehistory.MarkerKey{
+			FacilityID:           event.FacilityID,
+			ZoneID:               event.ZoneID,
+			ExternalIdentityHash: event.ExternalIdentityHash,
+		})
+		if err != nil {
+			return presence.ProjectionMarker{}, false, fmt.Errorf("read edge identity marker: %w", err)
+		}
+		if !found {
+			return presence.ProjectionMarker{}, false, nil
+		}
+
+		return presence.ProjectionMarker{
+			RecordedAt: marker.LastRecordedAt.UTC(),
+			EventID:    marker.LastEventID,
+		}, true, nil
+	}
 }
 
 func parseRFC3339Value(value, name string) (time.Time, error) {
