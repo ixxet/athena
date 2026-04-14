@@ -58,6 +58,19 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | Phase 3 shared substrate A / `v0.7.0` | Postgres-backed observations, derived sessions, and bounded internal analytics reads | gives manager-grade occupancy and flow work a real substrate before dashboards, scheduling, or AI summary copy |
 | later than `v0.7.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, derived sessions, and facility truth |
 
+## Verified Audit Carry-Forward
+
+The `2026-04-13` backend logic audit reran `go test -count=1 ./...` and
+re-read the projector, metrics, and read-path code before narrowing the next
+ATHENA hardening work.
+
+| Area | Ruling | Next honest line |
+| --- | --- | --- |
+| projector identity retention | verified medium: the in-process identity map is unbounded today | the first bounded hardening line later than `v0.7.0` should add an explicit retention, eviction, or cap strategy before dashboards, prediction, or AI summary work |
+| metrics occupancy callback context | verified low: metrics still reads default occupancy through `context.Background()` | fold into the same bounded hardening patch if the metrics path is touched; do not pretend it is a new capability line |
+| projector clock constructor | verified low readability cleanup: behavior is correct, but the default clock assignment is more confusing than it needs to be | only clean this up if the projector constructor is already open for the retention line |
+| prediction / dashboards / AI summary / booking | unchanged and deferred | do not treat the audit as a reason to widen past the storage-and-analytics substrate that `v0.7.0` just closed |
+
 ## Boundaries
 
 - Tracer 9 does not require ATHENA widening by default
