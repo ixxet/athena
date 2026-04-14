@@ -139,6 +139,42 @@ func TestMetricsEndpointScrapesCanonicalReadPath(t *testing.T) {
 	}
 }
 
+func TestDefaultOccupancySnapshotMatchesMetricsEndpoint(t *testing.T) {
+	baseTime := time.Date(2026, 4, 1, 8, 30, 0, 0, time.UTC)
+	service := presence.NewService(
+		adapter.NewMockAdapter(adapter.MockConfig{
+			FacilityID: "ashtonbee",
+			Entries:    3,
+			Exits:      1,
+			BaseTime:   baseTime,
+		}),
+		presence.WithClock(func() time.Time { return baseTime }),
+	)
+	readPath := presence.NewReadPath(service, domain.OccupancyFilter{
+		FacilityID: "ashtonbee",
+	})
+
+	snapshot, err := readPath.DefaultOccupancySnapshot()
+	if err != nil {
+		t.Fatalf("DefaultOccupancySnapshot() error = %v", err)
+	}
+	if snapshot.CurrentCount != 2 {
+		t.Fatalf("DefaultOccupancySnapshot().CurrentCount = %d, want 2", snapshot.CurrentCount)
+	}
+
+	handler := NewHandler(readPath, metrics.New(readPath), "mock")
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), "athena_current_occupancy 2") {
+		t.Fatalf("metrics body = %q, want athena_current_occupancy 2", recorder.Body.String())
+	}
+}
+
 func TestPresenceHistoryEndpointRequiresConfiguredHistory(t *testing.T) {
 	handler := testHandler(t)
 

@@ -30,6 +30,10 @@ func (r *ReadPath) DefaultOccupancy(ctx context.Context) (domain.OccupancyState,
 	return r.CurrentOccupancy(ctx, domain.OccupancyFilter{})
 }
 
+func (r *ReadPath) DefaultOccupancySnapshot() (domain.OccupancyState, error) {
+	return r.service.CurrentOccupancy(context.Background(), r.resolveFilter(domain.OccupancyFilter{}))
+}
+
 func (r *ReadPath) DefaultFilter() domain.OccupancyFilter {
 	return r.defaultFilter
 }

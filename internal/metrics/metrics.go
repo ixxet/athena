@@ -1,15 +1,13 @@
 package metrics
 
 import (
-	"context"
-
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ixxet/athena/internal/domain"
 )
 
 type OccupancyReader interface {
-	DefaultOccupancy(context.Context) (domain.OccupancyState, error)
+	DefaultOccupancySnapshot() (domain.OccupancyState, error)
 }
 
 type Metrics struct {
@@ -22,7 +20,7 @@ func New(reader OccupancyReader) *Metrics {
 		Name: "athena_current_occupancy",
 		Help: "Current occupancy count produced by ATHENA.",
 	}, func() float64 {
-		snapshot, err := reader.DefaultOccupancy(context.Background())
+		snapshot, err := reader.DefaultOccupancySnapshot()
 		if err != nil {
 			return 0
 		}
