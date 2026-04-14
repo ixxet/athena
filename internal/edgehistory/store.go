@@ -2,6 +2,7 @@ package edgehistory
 
 import (
 	"context"
+	"time"
 
 	"github.com/ixxet/athena/internal/edge"
 )
@@ -12,6 +13,25 @@ type ReplayReader interface {
 
 type RecentObservationReader interface {
 	ReadRecent(context.Context, int) ([]edge.ObservationRecord, error)
+}
+
+type MarkerKey struct {
+	FacilityID           string `json:"facility_id"`
+	ZoneID               string `json:"zone_id,omitempty"`
+	ExternalIdentityHash string `json:"external_identity_hash"`
+}
+
+type MarkerRecord struct {
+	MarkerKey
+	ObservationID  string    `json:"observation_id,omitempty"`
+	LastRecordedAt time.Time `json:"last_recorded_at"`
+	LastEventID    string    `json:"last_event_id"`
+	Direction      string    `json:"direction"`
+	CommittedAt    time.Time `json:"committed_at"`
+}
+
+type MarkerReader interface {
+	ReadMarker(context.Context, MarkerKey) (MarkerRecord, bool, error)
 }
 
 type PublicObservationReader interface {

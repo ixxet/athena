@@ -169,6 +169,12 @@ func (s *PostgresStore) RecordCommit(ctx context.Context, commit edge.Observatio
 		return fmt.Errorf("unsupported direction %q for committed observation", record.Direction)
 	}
 
+	if record.Result == "pass" {
+		if err := upsertIdentityMarker(ctx, tx, record, commit.CommittedAt); err != nil {
+			return err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit edge observation transaction: %w", err)
 	}
@@ -208,6 +214,54 @@ func (s *PostgresStore) ReadRecent(ctx context.Context, limit int) ([]edge.Obser
 	}
 	reverseObservations(records)
 	return records, nil
+}
+
+func (s *PostgresStore) ReadMarker(ctx context.Context, key MarkerKey) (MarkerRecord, bool, error) {
+	if strings.TrimSpace(key.FacilityID) == "" {
+		return MarkerRecord{}, false, fmt.Errorf("facility_id is required")
+	}
+	if strings.TrimSpace(key.ExternalIdentityHash) == "" {
+		return MarkerRecord{}, false, fmt.Errorf("external_identity_hash is required")
+	}
+
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			facility_id,
+			zone_id,
+			external_identity_hash,
+			observation_id,
+			last_recorded_at,
+			last_event_id,
+			direction,
+			committed_at
+		FROM athena.edge_identity_markers
+		WHERE
+			facility_id = $1
+			AND zone_id = $2
+			AND external_identity_hash = $3
+	`, strings.TrimSpace(key.FacilityID), strings.TrimSpace(key.ZoneID), strings.TrimSpace(key.ExternalIdentityHash))
+
+	var marker MarkerRecord
+	if err := row.Scan(
+		&marker.FacilityID,
+		&marker.ZoneID,
+		&marker.ExternalIdentityHash,
+		&marker.ObservationID,
+		&marker.LastRecordedAt,
+		&marker.LastEventID,
+		&marker.Direction,
+		&marker.CommittedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return MarkerRecord{}, false, nil
+		}
+		return MarkerRecord{}, false, fmt.Errorf("query edge identity marker: %w", err)
+	}
+
+	marker.LastRecordedAt = marker.LastRecordedAt.UTC()
+	marker.CommittedAt = marker.CommittedAt.UTC()
+
+	return marker, true, nil
 }
 
 func (s *PostgresStore) ReadPublicObservations(ctx context.Context, filter PublicFilter) ([]PublicObservation, error) {
@@ -365,6 +419,50 @@ func scanObservationRow(rows pgx.Rows) (edge.ObservationRecord, error) {
 	record.StoredAt = record.StoredAt.UTC()
 
 	return record, nil
+}
+
+func upsertIdentityMarker(ctx context.Context, tx pgx.Tx, record edge.ObservationRecord, committedAt time.Time) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO athena.edge_identity_markers (
+			facility_id,
+			zone_id,
+			external_identity_hash,
+			observation_id,
+			last_recorded_at,
+			last_event_id,
+			direction,
+			committed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (facility_id, zone_id, external_identity_hash) DO UPDATE
+		SET
+			observation_id = EXCLUDED.observation_id,
+			last_recorded_at = EXCLUDED.last_recorded_at,
+			last_event_id = EXCLUDED.last_event_id,
+			direction = EXCLUDED.direction,
+			committed_at = EXCLUDED.committed_at,
+			updated_at = NOW()
+		WHERE (
+			athena.edge_identity_markers.last_recorded_at,
+			athena.edge_identity_markers.last_event_id
+		) < (
+			EXCLUDED.last_recorded_at,
+			EXCLUDED.last_event_id
+		)
+	`,
+		record.FacilityID,
+		record.ZoneID,
+		record.ExternalIdentityHash,
+		record.ObservationID,
+		record.ObservedAt.UTC(),
+		record.EventID,
+		string(record.Direction),
+		committedAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert edge identity marker: %w", err)
+	}
+
+	return nil
 }
 
 func reverseObservations(records []edge.ObservationRecord) {
