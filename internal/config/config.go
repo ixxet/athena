@@ -6,29 +6,33 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ixxet/athena/internal/presence"
 )
 
 type Config struct {
-	HTTPAddr                    string
-	Adapter                     string
-	NATSURL                     string
-	IdentifiedPublishInterval   time.Duration
-	EdgeHashSalt                string
-	EdgeTokens                  map[string]string
-	EdgeOccupancyProjection     bool
-	EdgeObservationHistoryPath  string
-	EdgePostgresDSN             string
-	EdgeAnalyticsMaxWindow      time.Duration
-	FacilityCatalogPath         string
-	DefaultFacilityID           string
-	DefaultZoneID               string
-	MockFacilityID              string
-	MockZoneID                  string
-	MockEntries                 int
-	MockExits                   int
-	MockIdentifiedTagHashes     []string
-	MockIdentifiedExitTagHashes []string
-	CSVPath                     string
+	HTTPAddr                         string
+	Adapter                          string
+	NATSURL                          string
+	IdentifiedPublishInterval        time.Duration
+	EdgeHashSalt                     string
+	EdgeTokens                       map[string]string
+	EdgeOccupancyProjection          bool
+	EdgeProjectorAbsentRetention     time.Duration
+	EdgeProjectorMaxAbsentIdentities int
+	EdgeObservationHistoryPath       string
+	EdgePostgresDSN                  string
+	EdgeAnalyticsMaxWindow           time.Duration
+	FacilityCatalogPath              string
+	DefaultFacilityID                string
+	DefaultZoneID                    string
+	MockFacilityID                   string
+	MockZoneID                       string
+	MockEntries                      int
+	MockExits                        int
+	MockIdentifiedTagHashes          []string
+	MockIdentifiedExitTagHashes      []string
+	CSVPath                          string
 }
 
 func Load() (Config, error) {
@@ -52,32 +56,44 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	edgeProjectorAbsentRetention, err := getEnvAsDuration("ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION", presence.DefaultAbsentIdentityRetention)
+	if err != nil {
+		return Config{}, err
+	}
+
+	edgeProjectorMaxAbsentIdentities, err := getEnvAsInt("ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES", presence.DefaultMaxAbsentIdentities)
+	if err != nil {
+		return Config{}, err
+	}
+
 	analyticsMaxWindow, err := getEnvAsDuration("ATHENA_EDGE_ANALYTICS_MAX_WINDOW", 7*24*time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		HTTPAddr:                    getEnv("ATHENA_HTTP_ADDR", ":8080"),
-		Adapter:                     getEnv("ATHENA_ADAPTER", "mock"),
-		NATSURL:                     getEnv("ATHENA_NATS_URL", ""),
-		IdentifiedPublishInterval:   interval,
-		EdgeHashSalt:                getEnv("ATHENA_EDGE_HASH_SALT", ""),
-		EdgeTokens:                  parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
-		EdgeOccupancyProjection:     edgeProjection,
-		EdgeObservationHistoryPath:  getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
-		EdgePostgresDSN:             getEnv("ATHENA_EDGE_POSTGRES_DSN", ""),
-		EdgeAnalyticsMaxWindow:      analyticsMaxWindow,
-		FacilityCatalogPath:         getEnv("ATHENA_FACILITY_CATALOG_PATH", ""),
-		DefaultFacilityID:           getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
-		DefaultZoneID:               getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
-		MockFacilityID:              getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),
-		MockZoneID:                  getEnv("ATHENA_MOCK_ZONE_ID", getEnv("ATHENA_DEFAULT_ZONE_ID", "")),
-		MockEntries:                 entries,
-		MockExits:                   exits,
-		MockIdentifiedTagHashes:     splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", "")),
-		MockIdentifiedExitTagHashes: splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_EXIT_TAG_HASHES", "")),
-		CSVPath:                     getEnv("ATHENA_CSV_PATH", ""),
+		HTTPAddr:                         getEnv("ATHENA_HTTP_ADDR", ":8080"),
+		Adapter:                          getEnv("ATHENA_ADAPTER", "mock"),
+		NATSURL:                          getEnv("ATHENA_NATS_URL", ""),
+		IdentifiedPublishInterval:        interval,
+		EdgeHashSalt:                     getEnv("ATHENA_EDGE_HASH_SALT", ""),
+		EdgeTokens:                       parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
+		EdgeOccupancyProjection:          edgeProjection,
+		EdgeProjectorAbsentRetention:     edgeProjectorAbsentRetention,
+		EdgeProjectorMaxAbsentIdentities: edgeProjectorMaxAbsentIdentities,
+		EdgeObservationHistoryPath:       getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
+		EdgePostgresDSN:                  getEnv("ATHENA_EDGE_POSTGRES_DSN", ""),
+		EdgeAnalyticsMaxWindow:           analyticsMaxWindow,
+		FacilityCatalogPath:              getEnv("ATHENA_FACILITY_CATALOG_PATH", ""),
+		DefaultFacilityID:                getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
+		DefaultZoneID:                    getEnv("ATHENA_DEFAULT_ZONE_ID", ""),
+		MockFacilityID:                   getEnv("ATHENA_MOCK_FACILITY_ID", getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee")),
+		MockZoneID:                       getEnv("ATHENA_MOCK_ZONE_ID", getEnv("ATHENA_DEFAULT_ZONE_ID", "")),
+		MockEntries:                      entries,
+		MockExits:                        exits,
+		MockIdentifiedTagHashes:          splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_TAG_HASHES", "")),
+		MockIdentifiedExitTagHashes:      splitCSV(getEnv("ATHENA_MOCK_IDENTIFIED_EXIT_TAG_HASHES", "")),
+		CSVPath:                          getEnv("ATHENA_CSV_PATH", ""),
 	}
 
 	if cfg.MockEntries < 0 {
@@ -88,6 +104,12 @@ func Load() (Config, error) {
 	}
 	if cfg.IdentifiedPublishInterval <= 0 {
 		return Config{}, fmt.Errorf("invalid ATHENA_IDENTIFIED_PUBLISH_INTERVAL %s: value must be > 0", cfg.IdentifiedPublishInterval)
+	}
+	if cfg.EdgeProjectorAbsentRetention <= 0 {
+		return Config{}, fmt.Errorf("invalid ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION %s: value must be > 0", cfg.EdgeProjectorAbsentRetention)
+	}
+	if cfg.EdgeProjectorMaxAbsentIdentities <= 0 {
+		return Config{}, fmt.Errorf("invalid ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES %d: value must be > 0", cfg.EdgeProjectorMaxAbsentIdentities)
 	}
 	if cfg.EdgeAnalyticsMaxWindow <= 0 {
 		return Config{}, fmt.Errorf("invalid ATHENA_EDGE_ANALYTICS_MAX_WINDOW %s: value must be > 0", cfg.EdgeAnalyticsMaxWindow)

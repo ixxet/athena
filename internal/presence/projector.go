@@ -3,10 +3,16 @@ package presence
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/ixxet/athena/internal/domain"
+)
+
+const (
+	DefaultAbsentIdentityRetention = 24 * time.Hour
+	DefaultMaxAbsentIdentities     = 100000
 )
 
 type ProjectionResult struct {
@@ -14,11 +20,15 @@ type ProjectionResult struct {
 	Reason  string
 }
 
+type ProjectorOption func(*Projector)
+
 type Projector struct {
-	mu         sync.RWMutex
-	now        Clock
-	identities map[identityKey]identityState
-	aggregates map[aggregateKey]aggregateState
+	mu                  sync.RWMutex
+	now                 Clock
+	absentRetention     time.Duration
+	maxAbsentIdentities int
+	identities          map[identityKey]identityState
+	aggregates          map[aggregateKey]aggregateState
 }
 
 type identityKey struct {
@@ -44,24 +54,52 @@ type aggregateState struct {
 	ObservedAt   time.Time
 }
 
-func NewProjector() *Projector {
-	return NewProjectorWithClock(func() time.Time {
-		return time.Now().UTC()
-	})
+type prunableIdentity struct {
+	key   identityKey
+	state identityState
 }
 
-func NewProjectorWithClock(now Clock) *Projector {
-	projector := &Projector{
-		now: func() time.Time {
-			return time.Now().UTC()
-		},
-		identities: make(map[identityKey]identityState),
-		aggregates: make(map[aggregateKey]aggregateState),
+func WithAbsentIdentityRetention(retention time.Duration) ProjectorOption {
+	return func(projector *Projector) {
+		projector.absentRetention = retention
 	}
-	if now != nil {
-		projector.now = now
+}
+
+func WithMaxAbsentIdentities(limit int) ProjectorOption {
+	return func(projector *Projector) {
+		projector.maxAbsentIdentities = limit
+	}
+}
+
+func NewProjector(opts ...ProjectorOption) *Projector {
+	return NewProjectorWithClock(nil, opts...)
+}
+
+func NewProjectorWithClock(now Clock, opts ...ProjectorOption) *Projector {
+	if now == nil {
+		now = func() time.Time {
+			return time.Now().UTC()
+		}
 	}
 
+	projector := &Projector{
+		now:                 now,
+		absentRetention:     DefaultAbsentIdentityRetention,
+		maxAbsentIdentities: DefaultMaxAbsentIdentities,
+		identities:          make(map[identityKey]identityState),
+		aggregates:          make(map[aggregateKey]aggregateState),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(projector)
+		}
+	}
+	if projector.absentRetention <= 0 {
+		projector.absentRetention = DefaultAbsentIdentityRetention
+	}
+	if projector.maxAbsentIdentities <= 0 {
+		projector.maxAbsentIdentities = DefaultMaxAbsentIdentities
+	}
 	return projector
 }
 
@@ -112,6 +150,7 @@ func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() e
 			current.LastDirection = event.Direction
 			p.identities[key] = current
 			p.touchAggregate(event.FacilityID, event.ZoneID, recordedAt)
+			p.pruneAbsentIdentities(recordedAt)
 			return ProjectionResult{Applied: false, Reason: "already_present"}, nil
 		}
 		if onApply != nil {
@@ -126,6 +165,7 @@ func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() e
 		current.LastDirection = event.Direction
 		p.identities[key] = current
 		p.adjustAggregate(event.FacilityID, event.ZoneID, 1, recordedAt)
+		p.pruneAbsentIdentities(recordedAt)
 		return ProjectionResult{Applied: true, Reason: "entered"}, nil
 	case domain.DirectionOut:
 		if !exists || !current.Present {
@@ -135,6 +175,7 @@ func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() e
 			current.LastDirection = event.Direction
 			p.identities[key] = current
 			p.touchAggregate(event.FacilityID, event.ZoneID, recordedAt)
+			p.pruneAbsentIdentities(recordedAt)
 			return ProjectionResult{Applied: false, Reason: "already_absent"}, nil
 		}
 		if onApply != nil {
@@ -149,6 +190,7 @@ func (p *Projector) ApplyWithEffect(event domain.PresenceEvent, onApply func() e
 		current.LastDirection = event.Direction
 		p.identities[key] = current
 		p.adjustAggregate(event.FacilityID, event.ZoneID, -1, recordedAt)
+		p.pruneAbsentIdentities(recordedAt)
 		return ProjectionResult{Applied: true, Reason: "exited"}, nil
 	default:
 		return ProjectionResult{}, fmt.Errorf("unsupported direction %q", event.Direction)
@@ -205,6 +247,59 @@ func (p *Projector) updateAggregate(key aggregateKey, delta int, observedAt time
 		state.ObservedAt = observedAt
 	}
 	p.aggregates[key] = state
+}
+
+func (p *Projector) pruneAbsentIdentities(recordedAt time.Time) {
+	cutoff := recordedAt.Add(-p.absentRetention)
+	absent := make([]prunableIdentity, 0)
+
+	for key, state := range p.identities {
+		if state.Present {
+			continue
+		}
+		if state.LastRecordedAt.Before(cutoff) {
+			delete(p.identities, key)
+			continue
+		}
+		absent = append(absent, prunableIdentity{key: key, state: state})
+	}
+
+	if len(absent) <= p.maxAbsentIdentities {
+		return
+	}
+
+	sort.Slice(absent, func(i, j int) bool {
+		if !absent[i].state.LastRecordedAt.Equal(absent[j].state.LastRecordedAt) {
+			return absent[i].state.LastRecordedAt.Before(absent[j].state.LastRecordedAt)
+		}
+		if absent[i].state.LastEventID != absent[j].state.LastEventID {
+			return absent[i].state.LastEventID < absent[j].state.LastEventID
+		}
+		return compareIdentityKey(absent[i].key, absent[j].key) < 0
+	})
+
+	for _, candidate := range absent[:len(absent)-p.maxAbsentIdentities] {
+		delete(p.identities, candidate.key)
+	}
+}
+
+func compareIdentityKey(left, right identityKey) int {
+	switch {
+	case left.FacilityID < right.FacilityID:
+		return -1
+	case left.FacilityID > right.FacilityID:
+		return 1
+	case left.ZoneID < right.ZoneID:
+		return -1
+	case left.ZoneID > right.ZoneID:
+		return 1
+	case left.ExternalIdentityHash < right.ExternalIdentityHash:
+		return -1
+	case left.ExternalIdentityHash > right.ExternalIdentityHash:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func compareEventOrder(leftAt time.Time, leftID string, rightAt time.Time, rightID string) int {

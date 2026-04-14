@@ -131,7 +131,10 @@ func newServeCmd() *cobra.Command {
 				}
 				defer closePublisher()
 
-				projector := presence.NewProjector()
+				projector := presence.NewProjector(
+					presence.WithAbsentIdentityRetention(cfg.EdgeProjectorAbsentRetention),
+					presence.WithMaxAbsentIdentities(cfg.EdgeProjectorMaxAbsentIdentities),
+				)
 				if edgeStores.replayReader != nil {
 					records, err := edgeStores.replayReader.ReadAll(serveCtx)
 					if err != nil {
