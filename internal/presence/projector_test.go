@@ -212,6 +212,226 @@ func TestProjectorRejectsStaleEventOrder(t *testing.T) {
 	}
 }
 
+func TestProjectorConstructorsUseDefaultAbsentRetentionBounds(t *testing.T) {
+	projector := NewProjector()
+	if projector.absentRetention != DefaultAbsentIdentityRetention {
+		t.Fatalf("absentRetention = %s, want %s", projector.absentRetention, DefaultAbsentIdentityRetention)
+	}
+	if projector.maxAbsentIdentities != DefaultMaxAbsentIdentities {
+		t.Fatalf("maxAbsentIdentities = %d, want %d", projector.maxAbsentIdentities, DefaultMaxAbsentIdentities)
+	}
+
+	seeded := NewProjectorWithClock(nil)
+	if seeded.absentRetention != DefaultAbsentIdentityRetention {
+		t.Fatalf("seeded.absentRetention = %s, want %s", seeded.absentRetention, DefaultAbsentIdentityRetention)
+	}
+	if seeded.maxAbsentIdentities != DefaultMaxAbsentIdentities {
+		t.Fatalf("seeded.maxAbsentIdentities = %d, want %d", seeded.maxAbsentIdentities, DefaultMaxAbsentIdentities)
+	}
+}
+
+func TestProjectorPrunesAbsentIdentitiesByAge(t *testing.T) {
+	projector := NewProjector(
+		WithAbsentIdentityRetention(time.Hour),
+		WithMaxAbsentIdentities(10),
+	)
+
+	applyAbsentIdentity(t, projector, "old-absent", "ashtonbee", "gym", "tag-old", time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))
+	applyAbsentIdentity(t, projector, "recent-absent", "ashtonbee", "gym", "tag-recent", time.Date(2026, 4, 5, 11, 20, 0, 0, time.UTC))
+
+	presentAt := time.Date(2026, 4, 5, 11, 50, 0, 0, time.UTC)
+	if _, err := projector.Apply(testProjectedEvent("present-001", "ashtonbee", "gym", "tag-present", domain.DirectionIn, presentAt)); err != nil {
+		t.Fatalf("Apply(present) error = %v", err)
+	}
+
+	result, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("Apply(trigger) error = %v", err)
+	}
+	if !result.Applied || result.Reason != "entered" {
+		t.Fatalf("result = %#v, want entered applied result", result)
+	}
+
+	assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-old"})
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-recent"}, false)
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-present"}, true)
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-trigger"}, true)
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 2 {
+		t.Fatalf("current_count = %d, want 2", snapshot.CurrentCount)
+	}
+}
+
+func TestProjectorPrunesAbsentIdentitiesByCap(t *testing.T) {
+	projector := NewProjector(
+		WithAbsentIdentityRetention(24*time.Hour),
+		WithMaxAbsentIdentities(2),
+	)
+
+	if _, err := projector.Apply(testProjectedEvent("present-001", "ashtonbee", "gym", "tag-present", domain.DirectionIn, time.Date(2026, 4, 5, 9, 50, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(present) error = %v", err)
+	}
+	applyAbsentIdentity(t, projector, "absent-001", "ashtonbee", "gym", "tag-old", time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))
+	applyAbsentIdentity(t, projector, "absent-002", "ashtonbee", "gym", "tag-middle", time.Date(2026, 4, 5, 10, 10, 0, 0, time.UTC))
+	applyAbsentIdentity(t, projector, "absent-003", "ashtonbee", "gym", "tag-new", time.Date(2026, 4, 5, 10, 15, 0, 0, time.UTC))
+
+	result, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 10, 20, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("Apply(trigger) error = %v", err)
+	}
+	if !result.Applied || result.Reason != "entered" {
+		t.Fatalf("result = %#v, want entered applied result", result)
+	}
+
+	assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-old"})
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-middle"}, false)
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-new"}, false)
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-present"}, true)
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-trigger"}, true)
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 2 {
+		t.Fatalf("current_count = %d, want 2", snapshot.CurrentCount)
+	}
+}
+
+func TestProjectorPruneOrderIsDeterministic(t *testing.T) {
+	t.Run("oldest timestamp first", func(t *testing.T) {
+		projector := NewProjector(
+			WithAbsentIdentityRetention(24*time.Hour),
+			WithMaxAbsentIdentities(2),
+		)
+
+		applyAbsentIdentity(t, projector, "old-001", "ashtonbee", "gym", "tag-old", time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))
+		applyAbsentIdentity(t, projector, "mid-001", "ashtonbee", "gym", "tag-mid", time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))
+		applyAbsentIdentity(t, projector, "new-001", "ashtonbee", "gym", "tag-new", time.Date(2026, 4, 5, 10, 10, 0, 0, time.UTC))
+
+		if _, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 10, 15, 0, 0, time.UTC))); err != nil {
+			t.Fatalf("Apply(trigger) error = %v", err)
+		}
+
+		assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-old"})
+		assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-mid"}, false)
+		assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-new"}, false)
+	})
+
+	t.Run("event id lexical order", func(t *testing.T) {
+		projector := NewProjector(
+			WithAbsentIdentityRetention(24*time.Hour),
+			WithMaxAbsentIdentities(1),
+		)
+
+		applyAbsentIdentity(t, projector, "event-b", "ashtonbee", "gym", "tag-b", time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))
+		applyAbsentIdentity(t, projector, "event-a", "ashtonbee", "gym", "tag-a", time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))
+
+		if _, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))); err != nil {
+			t.Fatalf("Apply(trigger) error = %v", err)
+		}
+
+		assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-a"})
+		assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-b"}, false)
+	})
+
+	t.Run("identity key lexical order", func(t *testing.T) {
+		projector := NewProjector(
+			WithAbsentIdentityRetention(24*time.Hour),
+			WithMaxAbsentIdentities(1),
+		)
+
+		applyAbsentIdentity(t, projector, "event-001", "ashtonbee", "gym", "tag-a", time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))
+		applyAbsentIdentity(t, projector, "event-001", "ashtonbee", "gym", "tag-b", time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))
+
+		if _, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))); err != nil {
+			t.Fatalf("Apply(trigger) error = %v", err)
+		}
+
+		assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-a"})
+		assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-b"}, false)
+	})
+}
+
+func TestProjectorRetainsStaleAndDuplicateBehaviorWithinRetentionWindow(t *testing.T) {
+	projector := NewProjector(
+		WithAbsentIdentityRetention(time.Hour),
+		WithMaxAbsentIdentities(10),
+	)
+
+	if _, err := projector.Apply(testProjectedEvent("enter-001", "ashtonbee", "gym", "tag-001", domain.DirectionIn, time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(entry) error = %v", err)
+	}
+	if _, err := projector.Apply(testProjectedEvent("exit-001", "ashtonbee", "gym", "tag-001", domain.DirectionOut, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(exit) error = %v", err)
+	}
+
+	duplicate, err := projector.Apply(testProjectedEvent("exit-001", "ashtonbee", "gym", "tag-001", domain.DirectionOut, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("Apply(duplicate exit) error = %v", err)
+	}
+	if duplicate.Applied || duplicate.Reason != "duplicate" {
+		t.Fatalf("duplicate = %#v, want duplicate result", duplicate)
+	}
+
+	stale, err := projector.Apply(testProjectedEvent("exit-000", "ashtonbee", "gym", "tag-001", domain.DirectionOut, time.Date(2026, 4, 5, 10, 4, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("Apply(stale exit) error = %v", err)
+	}
+	if stale.Applied || stale.Reason != "stale" {
+		t.Fatalf("stale = %#v, want stale result", stale)
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 0 {
+		t.Fatalf("current_count = %d, want 0", snapshot.CurrentCount)
+	}
+}
+
+func TestProjectorFreshReentryAfterAbsentPruningIsAccepted(t *testing.T) {
+	projector := NewProjector(
+		WithAbsentIdentityRetention(time.Hour),
+		WithMaxAbsentIdentities(10),
+	)
+
+	if _, err := projector.Apply(testProjectedEvent("enter-001", "ashtonbee", "gym", "tag-001", domain.DirectionIn, time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(entry) error = %v", err)
+	}
+	if _, err := projector.Apply(testProjectedEvent("exit-001", "ashtonbee", "gym", "tag-001", domain.DirectionOut, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(exit) error = %v", err)
+	}
+
+	if _, err := projector.Apply(testProjectedEvent("trigger-001", "ashtonbee", "gym", "tag-trigger", domain.DirectionIn, time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("Apply(trigger) error = %v", err)
+	}
+	assertIdentityMissing(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-001"})
+
+	reentry, err := projector.Apply(testProjectedEvent("enter-002", "ashtonbee", "gym", "tag-001", domain.DirectionIn, time.Date(2026, 4, 5, 12, 10, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("Apply(reentry) error = %v", err)
+	}
+	if !reentry.Applied || reentry.Reason != "entered" {
+		t.Fatalf("reentry = %#v, want entered result", reentry)
+	}
+
+	assertIdentityPresent(t, projector, identityKey{FacilityID: "ashtonbee", ZoneID: "gym", ExternalIdentityHash: "tag-001"}, true)
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 2 {
+		t.Fatalf("current_count = %d, want 2", snapshot.CurrentCount)
+	}
+}
+
 func testProjectedEvent(id, facilityID, zoneID, identityHash string, direction domain.PresenceDirection, recordedAt time.Time) domain.PresenceEvent {
 	return domain.PresenceEvent{
 		ID:                   id,
@@ -221,5 +441,40 @@ func testProjectedEvent(id, facilityID, zoneID, identityHash string, direction d
 		Direction:            direction,
 		Source:               domain.SourceRFID,
 		RecordedAt:           recordedAt.UTC(),
+	}
+}
+
+func applyAbsentIdentity(t *testing.T, projector *Projector, eventID, facilityID, zoneID, identityHash string, recordedAt time.Time) {
+	t.Helper()
+
+	result, err := projector.Apply(testProjectedEvent(eventID, facilityID, zoneID, identityHash, domain.DirectionOut, recordedAt))
+	if err != nil {
+		t.Fatalf("Apply(absent %s) error = %v", identityHash, err)
+	}
+	if result.Applied {
+		t.Fatalf("Apply(absent %s) applied = true, want false (reason=%q)", identityHash, result.Reason)
+	}
+	if result.Reason != "already_absent" {
+		t.Fatalf("Apply(absent %s) reason = %q, want already_absent", identityHash, result.Reason)
+	}
+}
+
+func assertIdentityMissing(t *testing.T, projector *Projector, key identityKey) {
+	t.Helper()
+
+	if _, ok := projector.identities[key]; ok {
+		t.Fatalf("identity %#v = present, want missing", key)
+	}
+}
+
+func assertIdentityPresent(t *testing.T, projector *Projector, key identityKey, wantPresent bool) {
+	t.Helper()
+
+	state, ok := projector.identities[key]
+	if !ok {
+		t.Fatalf("identity %#v = missing, want present=%t", key, wantPresent)
+	}
+	if state.Present != wantPresent {
+		t.Fatalf("identity %#v present = %t, want %t", key, state.Present, wantPresent)
 	}
 }

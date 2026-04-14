@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,8 +19,15 @@ import (
 	"github.com/ixxet/athena/internal/edge"
 	"github.com/ixxet/athena/internal/edgehistory"
 	"github.com/ixxet/athena/internal/metrics"
+	"github.com/ixxet/athena/internal/publish"
 	"github.com/ixxet/athena/internal/server"
 )
+
+type serveStubPublisher struct{}
+
+func (serveStubPublisher) Publish(context.Context, string, []byte) error {
+	return nil
+}
 
 func TestBuildAppWithCSVAdapterFeedsOccupancyReadPath(t *testing.T) {
 	path := writeCSVFixture(t, strings.Join([]string{
@@ -237,6 +245,67 @@ func TestServeCommandShutsDownCleanlyWhenContextIsCanceled(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("serve command did not shut down within 10s after context cancellation")
+	}
+}
+
+func TestServeCommandStartsProjectionModeWithConfiguredProjectorBounds(t *testing.T) {
+	addr := reserveListenAddress(t)
+	t.Setenv("ATHENA_HTTP_ADDR", addr)
+	t.Setenv("ATHENA_ADAPTER", "mock")
+	t.Setenv("ATHENA_EDGE_OCCUPANCY_PROJECTION", "true")
+	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
+	t.Setenv("ATHENA_EDGE_TOKENS", "entry=node-token")
+	t.Setenv("ATHENA_NATS_URL", "nats://example:4222")
+	t.Setenv("ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION", "2h")
+	t.Setenv("ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES", "2")
+
+	originalPublisherHandle := newPublisherHandle
+	newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
+		return serveStubPublisher{}, func() error { return nil }, nil
+	}
+	defer func() {
+		newPublisherHandle = originalPublisherHandle
+	}()
+
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	command := newServeCmd()
+	command.SetContext(serveCtx)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- command.Execute()
+	}()
+
+	waitForHealthyHTTP(t, fmt.Sprintf("http://%s/api/v1/health", addr))
+
+	response, err := http.Get(fmt.Sprintf("http://%s/api/v1/health", addr)) //nolint:gosec // local integration probe
+	if err != nil {
+		t.Fatalf("GET /api/v1/health error = %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if !strings.Contains(string(body), "\"adapter\":\"edge-projection\"") {
+		t.Fatalf("health body = %q, want adapter edge-projection", string(body))
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve command did not shut down within 10s after projection-mode context cancellation")
 	}
 }
 

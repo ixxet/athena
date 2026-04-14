@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ixxet/athena/internal/presence"
 )
 
 func TestLoadRejectsInvalidAdapter(t *testing.T) {
@@ -63,6 +65,44 @@ func TestLoadRejectsInvalidEdgeAnalyticsMaxWindow(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ATHENA_EDGE_ANALYTICS_MAX_WINDOW") {
 		t.Fatalf("Load() error = %q, want ATHENA_EDGE_ANALYTICS_MAX_WINDOW context", err)
+	}
+}
+
+func TestLoadDefaultsProjectorBounds(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.EdgeProjectorAbsentRetention != presence.DefaultAbsentIdentityRetention {
+		t.Fatalf("EdgeProjectorAbsentRetention = %s, want %s", cfg.EdgeProjectorAbsentRetention, presence.DefaultAbsentIdentityRetention)
+	}
+	if cfg.EdgeProjectorMaxAbsentIdentities != presence.DefaultMaxAbsentIdentities {
+		t.Fatalf("EdgeProjectorMaxAbsentIdentities = %d, want %d", cfg.EdgeProjectorMaxAbsentIdentities, presence.DefaultMaxAbsentIdentities)
+	}
+}
+
+func TestLoadRejectsInvalidEdgeProjectorAbsentRetention(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION", "0s")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid projector absent retention error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION context", err)
+	}
+}
+
+func TestLoadRejectsInvalidEdgeProjectorMaxAbsentIdentities(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid projector max absent identities error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES context", err)
 	}
 }
 
