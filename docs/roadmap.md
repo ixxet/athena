@@ -67,6 +67,7 @@ ATHENA hardening work.
 | Area | Ruling | Next honest line |
 | --- | --- | --- |
 | projector identity retention | verified bounded: the in-process identity map now keeps absent identities only within retention and cap limits | keep the destructive coverage on age, cap, order, replay, and fresh re-entry boundaries honest, and state clearly that stale/duplicate protection for evicted absent identities is intentionally bounded while replay remains authoritative |
+| durable projector miss guardrail | verified bounded: committed pass writes now maintain compact durable identity markers, and projector misses consult them before accepting an older or duplicate event | keep replay authoritative, keep the file fallback compatible, and keep source/site ordering contract redesign deferred instead of sneaking it into this patch |
 | metrics occupancy callback context | verified bounded: metrics now reads default occupancy through a context-free snapshot helper | verify the server path still matches the read path; do not widen observability scope |
 | projector clock constructor | verified bounded readability cleanup: the constructor now defaults cleanly while still allowing an explicit clock | keep alignment checks narrow and patch-only |
 | prediction / dashboards / AI summary / booking | unchanged and deferred | do not treat the audit as a reason to widen past the storage-and-analytics substrate that `v0.7.0` just closed |
@@ -79,6 +80,8 @@ ATHENA hardening work.
 - the edge-driven occupancy slice still keeps projection in memory by default;
   the new Postgres-backed durable store is explicit, and the older file-backed
   history path remains only as a fallback
+- compact durable identity markers now guard projector misses after absent-state
+  eviction, but they do not replace replay as the occupancy authority
 - the bounded live deployment uses one facility, one node token, a private GHCR
   pull secret, and a narrow HTTPS proxy path; it is not yet a broad ATHENA
   ingress rollout
@@ -91,6 +94,9 @@ ATHENA hardening work.
 - duration-of-stay, tap frequency, and workstation-quality metrics should be
   derived from durable append-only observation history and session facts, not
   from ad hoc log scraping
+- source/site ordering contract redesign remains deferred to a later ingest
+  redesign line; this patch closes the projector-miss gap without widening that
+  contract
 - keep physical truth separate from member intent and product logic
 - do not activate Redis-backed hot counters before the basic read path needs them
 - do not widen into predictive dashboards before prediction is real

@@ -8,7 +8,8 @@ publication path that other repos depend on.
 > canonical occupancy read path, push-based edge tap ingress for identified
 > visit lifecycle publication, explicit in-memory edge-driven occupancy
 > projection for `serve`, Postgres-backed append-only edge observations with
-> derived session facts and bounded internal analytics reads, bounded
+> derived session facts, compact durable identity markers for projector misses,
+> and bounded internal analytics reads, bounded
 > retry/backoff publication with bounded process-local dedupe, bounded live
 > browser-reachable deployment of the narrower `v0.4.1` edge path, and shared
 > `ashton-proto` runtime contracts for arrival and departure events.
@@ -106,6 +107,7 @@ flowchart LR
 | Real ingress adapter | CSV presence-event adapter plus push-based edge ingress | Real | `v0.4.x` | CSV remains replay/import truth; edge ingress is the live source when explicit projection mode is enabled |
 | Live occupancy projection | In-memory identity and aggregate projection with bounded absent-state retention and cap handling | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
 | Durable edge history | Append-only Postgres observation tables plus commit markers | Real, explicit, repo/runtime | later than `v0.6.1` | Stores privacy-safe `pass` and `fail` observations append-only without leaking raw account values, names, or free-text status messages |
+| Durable projector miss guardrail | Compact Postgres or file-backed identity markers keyed by facility, zone, and hashed identity | Real, explicit, repo/runtime | `v0.7.2` | Rejects older or duplicate pass events after absent-state eviction without turning markers into a second occupancy authority |
 | Derived session analytics | Postgres-backed `edge_sessions` read model plus bounded internal HTTP/CLI reads | Real, internal-only | later than `v0.6.1` | Derives `open`, `closed`, and `unmatched_exit` session facts from accepted `pass` observations without rewriting the original observation history |
 | Legacy file-backed history | Append-only file journal plus replay helper | Still available, explicit fallback | `v0.5.0` | Keeps the older local/runtime durable-history path available when Postgres is not configured, but it is no longer the primary storage line for this repo/runtime slice |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
@@ -192,10 +194,15 @@ The current durable groundwork is intentionally narrow:
   `athena edge analytics`, one bounded internal HTTP facility-history read,
   and one bounded internal HTTP analytics read
 - restart/reload rebuilds occupancy from committed `pass` observations only
+- projector misses now consult compact durable last-seen markers before
+  accepting a supposedly fresh event
 - manager-grade flow and occupancy reads come from the Postgres-backed durable
   store and derived session facts, not from ad hoc memory or log scraping
 - browser and replay event-id derivation may still drift; ATHENA preserves the
   supplied `event_id` and does not claim cross-source event-id reconciliation
+- source/site ordering contract redesign is still deferred to a later ingest
+  redesign line; this patch closes the projector-miss gap without changing the
+  ingest contract
 
 If `Hermes` is the intended admin-facing service, it is a reasonable future
 surface for those reconciliation endpoints, with ATHENA remaining the ingest,
@@ -212,7 +219,9 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 | Edge ingress logs | Routine edge logs redact raw account values and resolved names, and the Postgres durable store keeps the same privacy boundary | Safer diagnostics and derived-session groundwork exist now, but there is still no public or operator search surface |
 | Persistence | Postgres-backed append-only observation storage and derived session facts are now the primary repo/runtime truth when `ATHENA_EDGE_POSTGRES_DSN` is set; the older file path remains a fallback only | Readers should not confuse repo/runtime truth with deployed truth, and they should not assume occupancy snapshots or public dashboards exist |
 | Publish dedupe | Republish protection is bounded and process-local, and worker retries are bounded per cycle | Restart safety still depends on downstream idempotency; durable history is not a publish ledger |
-| Replay posture | Restart still rebuilds occupancy by replaying committed observations instead of loading a durable occupancy snapshot | Deterministic and honest today, and replay remains authoritative for occupancy truth even though stale/duplicate suppression for evicted absent identities is now bounded by projector retention and cap |
+| Replay posture | Restart still rebuilds occupancy by replaying committed observations instead of loading a durable occupancy snapshot | Deterministic and honest today, and replay remains authoritative for occupancy truth; compact durable markers only guard projector misses and do not replace replay |
+| Projector misses | After absent-state eviction, projector misses now consult compact durable markers before accepting an older or duplicate event | This closes the old evicted-`in` slip path without widening ATHENA into source-ordering redesign or a second occupancy authority |
+| Miss lookup failures | If durable marker lookup fails on a projector miss, the miss path now fails closed | This prefers bounded availability friction over accepting an event that could double-count occupancy |
 | Projection mode | Edge-driven occupancy requires an explicit `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config | This tracer changes the occupancy source intentionally, not by config accident |
 | Health and metrics | The surfaces are useful, but still narrower than a mature production service would expose | Good for the tracer, not yet the final observability story |
 

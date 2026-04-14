@@ -20,6 +20,8 @@ Phase 3 shared substrate A update:
   repo/runtime
 - derived `open`, `closed`, and `unmatched_exit` session facts are now real in
   repo/runtime
+- compact durable identity markers are now real in repo/runtime for projector
+  miss protection after absent-state eviction
 - privacy-safe CLI/internal history reads plus one bounded internal analytics
   read are now real in repo/runtime
 - replay of committed `pass` observations into a fresh projector is now real in
@@ -43,6 +45,9 @@ What ATHENA already does:
 - publishes safe identified arrival/departure events downstream
 - derives `open`, `closed`, and `unmatched_exit` session facts from accepted
   `pass` events
+- writes a compact durable last-seen marker for each committed `pass` identity
+  key and consults it on projector misses before accepting a supposedly fresh
+  event
 - exposes one bounded internal analytics read over facility, zone, node, and
   time window
 - replays committed `pass` observations from the configured durable store into
@@ -57,10 +62,19 @@ What ATHENA does **not** do yet:
 - store occupancy snapshots durably
 - expose query/search APIs over observed edge history
 - reconcile student-number aliases and RFID aliases into a canonical person
+- redesign the source/site ordering contract for ingest conflict resolution
 - widen into booking, public dashboards, or AI summary surfaces
 
 That means the next storage slice is not about inventing new runtime truth. It
 is about preserving the truth ATHENA already sees.
+
+The current marker line is intentionally narrow:
+
+- markers are a compact guardrail for projector misses, not a second occupancy
+  authority
+- replay from committed `pass` observations remains authoritative
+- source/site ordering contract redesign is explicitly deferred to a later
+  ingest redesign instead of being smuggled into this patch
 
 ## Questions The Next Slice Should Answer
 
