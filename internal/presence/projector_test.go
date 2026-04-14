@@ -212,6 +212,118 @@ func TestProjectorRejectsStaleEventOrder(t *testing.T) {
 	}
 }
 
+func TestProjectorConsultsDurableMarkerOnlyOnMiss(t *testing.T) {
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	projector := NewProjectorWithClock(func() time.Time { return now },
+		WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (ProjectionMarker, bool, error) {
+			calls++
+			return ProjectionMarker{}, false, nil
+		}),
+	)
+
+	first, err := projector.Apply(testProjectedEvent("edge-001", "ashtonbee", "gym", "tag-001", domain.DirectionIn, now))
+	if err != nil {
+		t.Fatalf("Apply(first) error = %v", err)
+	}
+	if !first.Applied || first.Reason != "entered" {
+		t.Fatalf("first result = %#v, want entered applied result", first)
+	}
+	if calls != 1 {
+		t.Fatalf("marker lookup calls = %d, want 1 on miss", calls)
+	}
+
+	calls = 0
+	second, err := projector.Apply(testProjectedEvent("edge-002", "ashtonbee", "gym", "tag-001", domain.DirectionIn, now.Add(time.Minute)))
+	if err != nil {
+		t.Fatalf("Apply(second) error = %v", err)
+	}
+	if second.Applied {
+		t.Fatalf("second.Applied = true, want false (reason=%q)", second.Reason)
+	}
+	if second.Reason != "already_present" {
+		t.Fatalf("second.Reason = %q, want already_present", second.Reason)
+	}
+	if calls != 0 {
+		t.Fatalf("marker lookup calls = %d, want 0 on identity-state hit", calls)
+	}
+}
+
+func TestProjectorRejectsOlderEventAgainstDurableMarker(t *testing.T) {
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	projector := NewProjectorWithClock(func() time.Time { return now },
+		WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (ProjectionMarker, bool, error) {
+			return ProjectionMarker{
+				RecordedAt: now.Add(time.Minute),
+				EventID:    "edge-002",
+			}, true, nil
+		}),
+	)
+
+	result, err := projector.Apply(testProjectedEvent("edge-001", "ashtonbee", "gym", "tag-001", domain.DirectionIn, now))
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("result.Applied = true, want false (reason=%q)", result.Reason)
+	}
+	if result.Reason != "stale" {
+		t.Fatalf("result.Reason = %q, want stale", result.Reason)
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 0 {
+		t.Fatalf("current_count = %d, want 0 after stale marker rejection", snapshot.CurrentCount)
+	}
+}
+
+func TestProjectorKeepsOlderOutEventHarmlessAfterMarkerLookup(t *testing.T) {
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	projector := NewProjectorWithClock(func() time.Time { return now },
+		WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (ProjectionMarker, bool, error) {
+			return ProjectionMarker{
+				RecordedAt: now.Add(time.Minute),
+				EventID:    "edge-002",
+			}, true, nil
+		}),
+	)
+
+	result, err := projector.Apply(testProjectedEvent("edge-001", "ashtonbee", "gym", "tag-001", domain.DirectionOut, now))
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("result.Applied = true, want false (reason=%q)", result.Reason)
+	}
+	if result.Reason != "stale" {
+		t.Fatalf("result.Reason = %q, want stale", result.Reason)
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{FacilityID: "ashtonbee", ZoneID: "gym"})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 0 {
+		t.Fatalf("current_count = %d, want 0 after stale out rejection", snapshot.CurrentCount)
+	}
+}
+
+func TestProjectorFailsClosedWhenDurableMarkerLookupErrors(t *testing.T) {
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	projector := NewProjectorWithClock(func() time.Time { return now },
+		WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (ProjectionMarker, bool, error) {
+			return ProjectionMarker{}, false, context.DeadlineExceeded
+		}),
+	)
+
+	if _, err := projector.Apply(testProjectedEvent("edge-001", "ashtonbee", "gym", "tag-001", domain.DirectionIn, now)); err == nil {
+		t.Fatal("Apply() error = nil, want durable marker lookup failure")
+	}
+}
+
 func TestProjectorConstructorsUseDefaultAbsentRetentionBounds(t *testing.T) {
 	projector := NewProjector()
 	if projector.absentRetention != DefaultAbsentIdentityRetention {

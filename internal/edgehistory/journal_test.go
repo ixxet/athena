@@ -69,6 +69,36 @@ func TestFileStoreRoundTripRedactsRawIdentity(t *testing.T) {
 	if strings.Contains(string(contents), req.StatusMessage) {
 		t.Fatalf("history file leaked status_message: %s", contents)
 	}
+	if !strings.Contains(string(contents), `"kind":"marker"`) {
+		t.Fatalf("history file did not record a marker entry: %s", contents)
+	}
+
+	marker, ok, err := ReadMarker(historyPath, MarkerKey{
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		ExternalIdentityHash: edge.HashAccount(req.AccountRaw, "salt"),
+	})
+	if err != nil {
+		t.Fatalf("ReadMarker() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ReadMarker() ok = false, want true")
+	}
+	if marker.ObservationID == "" {
+		t.Fatal("marker.ObservationID = empty, want exact committed observation identity")
+	}
+	if marker.LastEventID != req.EventID {
+		t.Fatalf("marker.LastEventID = %q, want %q", marker.LastEventID, req.EventID)
+	}
+	if marker.Direction != "in" {
+		t.Fatalf("marker.Direction = %q, want in", marker.Direction)
+	}
+	if marker.LastRecordedAt != mustTime(t, req.ObservedAt) {
+		t.Fatalf("marker.LastRecordedAt = %s, want %s", marker.LastRecordedAt, req.ObservedAt)
+	}
+	if marker.CommittedAt.IsZero() {
+		t.Fatal("marker.CommittedAt = zero, want durable committed timestamp")
+	}
 
 	records, err := ReadAll(historyPath)
 	if err != nil {
@@ -286,6 +316,63 @@ func TestReplayFileSkipsPassObservationThatNeverCommittedLive(t *testing.T) {
 	}
 	if strings.Contains(string(contents), req.StatusMessage) {
 		t.Fatalf("history file leaked status_message: %s", contents)
+	}
+
+	_, ok, err := ReadMarker(historyPath, MarkerKey{
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		ExternalIdentityHash: edge.HashAccount(req.AccountRaw, "salt"),
+	})
+	if err != nil {
+		t.Fatalf("ReadMarker() error = %v", err)
+	}
+	if ok {
+		t.Fatalf("ReadMarker() ok = true, want false for uncommitted pass")
+	}
+}
+
+func TestReadMarkerDerivesLatestCommittedPassFromLegacyHistory(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "edge-history.jsonl")
+	payload := strings.Join([]string{
+		`{"kind":"observation","observation":{"event_id":"edge-legacy-001","facility_id":"ashtonbee","zone_id":"gym-floor","node_id":"entry-node","direction":"in","result":"pass","source":"rfid","external_identity_hash":"hash-001","observed_at":"2026-04-04T12:00:00Z","stored_at":"2026-04-04T12:00:01Z"}}`,
+		`{"kind":"commit","commit":{"event_id":"edge-legacy-001","committed_at":"2026-04-04T12:00:02Z"}}`,
+		`{"kind":"observation","observation":{"event_id":"edge-legacy-002","facility_id":"ashtonbee","zone_id":"gym-floor","node_id":"entry-node","direction":"out","result":"pass","source":"rfid","external_identity_hash":"hash-001","observed_at":"2026-04-04T12:01:00Z","stored_at":"2026-04-04T12:01:01Z"}}`,
+		`{"kind":"commit","commit":{"event_id":"edge-legacy-002","committed_at":"2026-04-04T12:01:02Z"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(historyPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	marker, ok, err := ReadMarker(historyPath, MarkerKey{
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		ExternalIdentityHash: "hash-001",
+	})
+	if err != nil {
+		t.Fatalf("ReadMarker() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ReadMarker() ok = false, want true")
+	}
+	if marker.LastEventID != "edge-legacy-002" {
+		t.Fatalf("marker.LastEventID = %q, want edge-legacy-002", marker.LastEventID)
+	}
+	if marker.Direction != "out" {
+		t.Fatalf("marker.Direction = %q, want out", marker.Direction)
+	}
+	if marker.LastRecordedAt != mustTime(t, "2026-04-04T12:01:00Z") {
+		t.Fatalf("marker.LastRecordedAt = %s, want 2026-04-04T12:01:00Z", marker.LastRecordedAt)
+	}
+
+	records, err := ReadAll(historyPath)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("len(records) = %d, want 2", len(records))
+	}
+	if records[1].CommittedAt == nil {
+		t.Fatal("records[1].CommittedAt = nil, want legacy committed pass to remain readable")
 	}
 }
 

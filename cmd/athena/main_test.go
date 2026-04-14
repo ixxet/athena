@@ -250,12 +250,14 @@ func TestServeCommandShutsDownCleanlyWhenContextIsCanceled(t *testing.T) {
 
 func TestServeCommandStartsProjectionModeWithConfiguredProjectorBounds(t *testing.T) {
 	addr := reserveListenAddress(t)
+	historyPath := filepath.Join(t.TempDir(), "edge-history.jsonl")
 	t.Setenv("ATHENA_HTTP_ADDR", addr)
 	t.Setenv("ATHENA_ADAPTER", "mock")
 	t.Setenv("ATHENA_EDGE_OCCUPANCY_PROJECTION", "true")
 	t.Setenv("ATHENA_EDGE_HASH_SALT", "salt")
 	t.Setenv("ATHENA_EDGE_TOKENS", "entry=node-token")
 	t.Setenv("ATHENA_NATS_URL", "nats://example:4222")
+	t.Setenv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", historyPath)
 	t.Setenv("ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION", "2h")
 	t.Setenv("ATHENA_EDGE_PROJECTOR_MAX_ABSENT_IDENTITIES", "2")
 
@@ -295,6 +297,23 @@ func TestServeCommandStartsProjectionModeWithConfiguredProjectorBounds(t *testin
 	}
 	if !strings.Contains(string(body), "\"adapter\":\"edge-projection\"") {
 		t.Fatalf("health body = %q, want adapter edge-projection", string(body))
+	}
+
+	countResponse, err := http.Get(fmt.Sprintf("http://%s/api/v1/presence/count", addr)) //nolint:gosec // local integration probe
+	if err != nil {
+		t.Fatalf("GET /api/v1/presence/count error = %v", err)
+	}
+	defer countResponse.Body.Close()
+
+	countBody, err := io.ReadAll(countResponse.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if countResponse.StatusCode != http.StatusOK {
+		t.Fatalf("count status = %d, want %d", countResponse.StatusCode, http.StatusOK)
+	}
+	if !strings.Contains(string(countBody), "\"current_count\":0") {
+		t.Fatalf("count body = %q, want current_count 0", string(countBody))
 	}
 
 	cancel()

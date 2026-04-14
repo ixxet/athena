@@ -608,6 +608,98 @@ func TestAcceptTapWithProjectionSkipsRepeatedPassIn(t *testing.T) {
 	}
 }
 
+func TestAcceptTapWithProjectionRejectsOlderInEventAfterDurableMarkerLookup(t *testing.T) {
+	publisher := &stubPublisher{}
+	projector := presence.NewProjector(
+		presence.WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (presence.ProjectionMarker, bool, error) {
+			return presence.ProjectionMarker{
+				RecordedAt: time.Date(2026, 4, 4, 12, 1, 0, 0, time.UTC),
+				EventID:    "edge-newer-marker",
+			}, true, nil
+		}),
+	)
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-old-in",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:00:00Z",
+		Result:     "pass",
+	})
+	if err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+	if result.Status != "observed" {
+		t.Fatalf("result.Status = %q, want observed", result.Status)
+	}
+	if result.Published {
+		t.Fatal("result.Published = true, want false")
+	}
+	if result.Result != "pass" {
+		t.Fatalf("result.Result = %q, want pass", result.Result)
+	}
+	if len(publisher.messages) != 0 {
+		t.Fatalf("len(messages) = %d, want 0", len(publisher.messages))
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+	})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 0 {
+		t.Fatalf("current_count = %d, want 0 after stale marker rejection", snapshot.CurrentCount)
+	}
+}
+
+func TestAcceptTapWithProjectionFailsClosedOnDurableMarkerLookupError(t *testing.T) {
+	publisher := &stubPublisher{}
+	projector := presence.NewProjector(
+		presence.WithProjectionMarkerResolver(func(context.Context, domain.PresenceEvent) (presence.ProjectionMarker, bool, error) {
+			return presence.ProjectionMarker{}, false, context.DeadlineExceeded
+		}),
+	)
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	if _, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:    "edge-old-in",
+		AccountRaw: "1000123456",
+		Direction:  "in",
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+		NodeID:     "entry-node",
+		ObservedAt: "2026-04-04T12:00:00Z",
+		Result:     "pass",
+	}); err == nil {
+		t.Fatal("AcceptTap() error = nil, want durable marker lookup failure")
+	}
+	if len(publisher.messages) != 0 {
+		t.Fatalf("len(messages) = %d, want 0 on failed lookup", len(publisher.messages))
+	}
+}
+
 func TestAcceptTapWithProjectionPublishesDepartureAfterArrival(t *testing.T) {
 	publisher := &stubPublisher{}
 	projector := presence.NewProjector()

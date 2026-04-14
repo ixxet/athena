@@ -141,6 +141,30 @@ func TestPostgresStoreReplayAndAnalytics(t *testing.T) {
 		t.Fatalf("committed rows = %d, want 2", committed)
 	}
 
+	marker, ok, err := store.ReadMarker(context.Background(), MarkerKey{
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		ExternalIdentityHash: edge.HashAccount("1000123456", "salt"),
+	})
+	if err != nil {
+		t.Fatalf("ReadMarker() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ReadMarker() ok = false, want true")
+	}
+	if marker.LastEventID != "edge-out-accepted-001" {
+		t.Fatalf("marker.LastEventID = %q, want edge-out-accepted-001", marker.LastEventID)
+	}
+	if marker.Direction != "out" {
+		t.Fatalf("marker.Direction = %q, want out", marker.Direction)
+	}
+	if marker.LastRecordedAt != time.Date(2026, 4, 4, 12, 5, 0, 0, time.UTC) {
+		t.Fatalf("marker.LastRecordedAt = %s, want 2026-04-04T12:05:00Z", marker.LastRecordedAt)
+	}
+	if got := countRows(t, store, "athena.edge_identity_markers"); got != 1 {
+		t.Fatalf("edge_identity_markers rows = %d, want 1", got)
+	}
+
 	publicObservations, err := store.ReadPublicObservations(context.Background(), PublicFilter{
 		FacilityID: "ashtonbee",
 		Since:      time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC),
@@ -351,6 +375,9 @@ func TestPostgresStoreRejectsUnauthorizedAndMalformedWrites(t *testing.T) {
 	}
 	if got := countRows(t, store, "athena.edge_sessions"); got != 0 {
 		t.Fatalf("edge_sessions rows = %d, want 0", got)
+	}
+	if got := countRows(t, store, "athena.edge_identity_markers"); got != 0 {
+		t.Fatalf("edge_identity_markers rows = %d, want 0", got)
 	}
 }
 
