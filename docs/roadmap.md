@@ -66,9 +66,9 @@ ATHENA hardening work.
 
 | Area | Ruling | Next honest line |
 | --- | --- | --- |
-| projector identity retention | verified medium: the in-process identity map is unbounded today | the first bounded hardening line later than `v0.7.0` should add an explicit retention, eviction, or cap strategy before dashboards, prediction, or AI summary work |
-| metrics occupancy callback context | verified low: metrics still reads default occupancy through `context.Background()` | fold into the same bounded hardening patch if the metrics path is touched; do not pretend it is a new capability line |
-| projector clock constructor | verified low readability cleanup: behavior is correct, but the default clock assignment is more confusing than it needs to be | only clean this up if the projector constructor is already open for the retention line |
+| projector identity retention | verified bounded: the in-process identity map now keeps absent identities only within retention and cap limits | keep the destructive coverage on age, cap, order, replay, and fresh re-entry boundaries honest, and state clearly that stale/duplicate protection for evicted absent identities is intentionally bounded while replay remains authoritative |
+| metrics occupancy callback context | verified bounded: metrics now reads default occupancy through a context-free snapshot helper | verify the server path still matches the read path; do not widen observability scope |
+| projector clock constructor | verified bounded readability cleanup: the constructor now defaults cleanly while still allowing an explicit clock | keep alignment checks narrow and patch-only |
 | prediction / dashboards / AI summary / booking | unchanged and deferred | do not treat the audit as a reason to widen past the storage-and-analytics substrate that `v0.7.0` just closed |
 
 ## Boundaries

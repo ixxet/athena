@@ -104,7 +104,7 @@ flowchart LR
 | Shared contract | `ashton-proto` generated types + runtime helper | Instituted | `v0.1.x` -> `v0.3.x` | Publishes bytes from the shared contract path |
 | Adapter model | Mock adapter | Instituted | `v0.1.x` -> `v0.4.x` | Deterministic fixtures remain available for tests and bounded smoke |
 | Real ingress adapter | CSV presence-event adapter plus push-based edge ingress | Real | `v0.4.x` | CSV remains replay/import truth; edge ingress is the live source when explicit projection mode is enabled |
-| Live occupancy projection | In-memory identity and aggregate projection | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
+| Live occupancy projection | In-memory identity and aggregate projection with bounded absent-state retention and cap handling | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
 | Durable edge history | Append-only Postgres observation tables plus commit markers | Real, explicit, repo/runtime | later than `v0.6.1` | Stores privacy-safe `pass` and `fail` observations append-only without leaking raw account values, names, or free-text status messages |
 | Derived session analytics | Postgres-backed `edge_sessions` read model plus bounded internal HTTP/CLI reads | Real, internal-only | later than `v0.6.1` | Derives `open`, `closed`, and `unmatched_exit` session facts from accepted `pass` observations without rewriting the original observation history |
 | Legacy file-backed history | Append-only file journal plus replay helper | Still available, explicit fallback | `v0.5.0` | Keeps the older local/runtime durable-history path available when Postgres is not configured, but it is no longer the primary storage line for this repo/runtime slice |
@@ -212,7 +212,7 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 | Edge ingress logs | Routine edge logs redact raw account values and resolved names, and the Postgres durable store keeps the same privacy boundary | Safer diagnostics and derived-session groundwork exist now, but there is still no public or operator search surface |
 | Persistence | Postgres-backed append-only observation storage and derived session facts are now the primary repo/runtime truth when `ATHENA_EDGE_POSTGRES_DSN` is set; the older file path remains a fallback only | Readers should not confuse repo/runtime truth with deployed truth, and they should not assume occupancy snapshots or public dashboards exist |
 | Publish dedupe | Republish protection is bounded and process-local, and worker retries are bounded per cycle | Restart safety still depends on downstream idempotency; durable history is not a publish ledger |
-| Replay posture | Restart still rebuilds occupancy by replaying committed observations instead of loading a durable occupancy snapshot | Deterministic and honest today, but startup cost still grows with committed history volume |
+| Replay posture | Restart still rebuilds occupancy by replaying committed observations instead of loading a durable occupancy snapshot | Deterministic and honest today, and replay remains authoritative for occupancy truth even though stale/duplicate suppression for evicted absent identities is now bounded by projector retention and cap |
 | Projection mode | Edge-driven occupancy requires an explicit `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve config | This tracer changes the occupancy source intentionally, not by config accident |
 | Health and metrics | The surfaces are useful, but still narrower than a mature production service would expose | Good for the tracer, not yet the final observability story |
 
@@ -223,7 +223,7 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - deterministic mock fixtures back the first read path
 - a source-backed CSV adapter can now drive the same occupancy read path locally
 - a push-based edge ingress can authenticate per-node clients, hash raw account ids, and publish identified arrival and departure events through NATS
-- an explicit in-memory edge occupancy projection can now drive `/api/v1/presence/count` and Prometheus from the same normalized pass-event stream used for identified publication
+- an explicit in-memory edge occupancy projection can now drive `/api/v1/presence/count` and Prometheus from the same normalized pass-event stream used for identified publication, while absent identities stay bounded by retention and cap
 - a Postgres-backed append-only durable observation store can now write both
   `pass` and `fail` observations behind the same ingress path without changing
   the live response contract
