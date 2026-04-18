@@ -141,6 +141,19 @@ Template note:
   `touchnet-edge-live-*.user.js` so active secrets do not get committed by
   accident
 
+Current bounded node registry:
+
+| Facility | Zone | Node ID | Typical machine | Local live script |
+| --- | --- | --- | --- | --- |
+| `ashtonbee` | `gym-floor` | `ash-gym-01` | Windows / modern Tampermonkey | `touchnet-edge-live-ashtonbee-ash-gym-01.user.js` |
+| `ashtonbee` | `gym-floor` | `ash-gym-02` | Chromebook / legacy Tampermonkey | `touchnet-edge-live-ashtonbee-ash-gym-02-legacy.user.js` |
+| `morningside` | `weight-room` | `ms-gym-01` | Windows / modern Tampermonkey | `touchnet-edge-live-morningside-ms-gym-01.user.js` |
+| `morningside` | `weight-room` | `ms-gym-02` | Chromebook / legacy Tampermonkey | `touchnet-edge-live-morningside-ms-gym-02-legacy.user.js` |
+
+The node ID identifies the workstation only. It does **not** hardcode entry or
+exit polarity. Direction still comes from the TouchNet row text so a reader can
+physically swap roles later without renaming the node.
+
 ## Chrome Quick Start
 
 For the real TouchNet page:
@@ -189,7 +202,12 @@ The first bounded multi-workstation proof now includes:
 - truthful facility and zone routing for Morningside:
   - `facility_id=morningside`
   - `zone_id=weight-room`
+- truthful facility and zone routing for Ashtonbee:
+  - `facility_id=ashtonbee`
+  - `zone_id=gym-floor`
 - workstation-neutral node IDs:
+  - `ash-gym-01`
+  - `ash-gym-02`
   - `ms-gym-01`
   - `ms-gym-02`
 - direction inferred from the TouchNet row itself, not from the workstation
@@ -226,6 +244,9 @@ Compatibility note:
   Windows
 - keep workstation-specific live scripts local-only when they contain active
   node tokens; do not commit those token-bearing variants into the public repo
+- if a node token changes in the live secret, update the local ignored live
+  script for that workstation and restart the ATHENA deployment so the pod
+  reloads the new node map
 
 ## Observed Fields
 
