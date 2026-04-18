@@ -37,6 +37,9 @@
     retryIntervalMs: 5000,
     readyPollMs: 1000,
     focusPollMs: 1000,
+    // Disable the red focus banner by default. Turn this on only when
+    // troubleshooting scanner-focus problems on a workstation.
+    showFocusBanner: false,
     seenStorageKey: 'ashton.edge.template.legacy.seen',
     queueStorageKey: 'ashton.edge.template.legacy.queue'
   };
@@ -443,6 +446,13 @@
   }
 
   function updateFocusBanner() {
+    if (!CONFIG.showFocusBanner) {
+      if (state.banner) {
+        state.banner.style.display = 'none';
+      }
+      return;
+    }
+
     var input = document.querySelector(CONFIG.inputSelector);
     var banner = ensureBanner();
     banner.style.display = input && document.activeElement !== input ? 'block' : 'none';
@@ -457,7 +467,9 @@
     }, CONFIG.readyPollMs);
 
     state.retryTimer = window.setInterval(drainQueue, CONFIG.retryIntervalMs);
-    state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    if (CONFIG.showFocusBanner) {
+      state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    }
   }
 
   console.info('ASHTON edge legacy: script active', window.location.href, CONFIG.nodeId);
@@ -468,7 +480,9 @@
     startPolling();
   } else {
     state.retryTimer = window.setInterval(drainQueue, CONFIG.retryIntervalMs);
-    state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    if (CONFIG.showFocusBanner) {
+      state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    }
   }
 
   updateFocusBanner();

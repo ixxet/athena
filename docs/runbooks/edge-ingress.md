@@ -165,7 +165,9 @@ For the real TouchNet page:
    - `nodeId` to the node configured in `ATHENA_EDGE_TOKENS`
    - `token` to the token paired with that node
 4. Refresh the TouchNet page once after saving the script.
-5. Keep cursor focus in the account field. The script shows a red banner if focus leaves `#verify_account_number`.
+5. Keep cursor focus in the account field. The scanner still depends on that
+   focus, but the red warning banner is now disabled by default because it is
+   visually noisy during normal operation.
 6. Scan a card or type a number and press Enter.
 7. Watch ATHENA logs for `edge tap accepted`.
 

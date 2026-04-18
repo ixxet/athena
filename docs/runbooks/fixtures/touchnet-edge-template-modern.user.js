@@ -38,6 +38,9 @@
     retryIntervalMs: 5000,
     readyPollMs: 1000,
     focusPollMs: 1000,
+    // Disable the red focus banner by default. Turn this on only when
+    // troubleshooting scanner-focus problems on a workstation.
+    showFocusBanner: false,
     storage: {
       seen: 'ashton.edge.template.seen',
       queue: 'ashton.edge.template.queue',
@@ -384,6 +387,13 @@
   }
 
   function updateFocusBanner() {
+    if (!CONFIG.showFocusBanner) {
+      if (state.banner) {
+        state.banner.style.display = 'none';
+      }
+      return;
+    }
+
     const input = document.querySelector(CONFIG.selectors.input);
     const banner = ensureBanner();
     banner.style.display = input && document.activeElement !== input ? 'block' : 'none';
@@ -401,7 +411,9 @@
       void drainQueue();
     }, CONFIG.retryIntervalMs);
 
-    state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    if (CONFIG.showFocusBanner) {
+      state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    }
   }
 
   void drainQueue();
@@ -413,7 +425,9 @@
     state.retryTimer = window.setInterval(() => {
       void drainQueue();
     }, CONFIG.retryIntervalMs);
-    state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    if (CONFIG.showFocusBanner) {
+      state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+    }
   }
   updateFocusBanner();
 })();
