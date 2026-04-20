@@ -464,6 +464,46 @@ func TestPostgresStoreAcceptsRecognizedDeniedThroughFacilityPolicy(t *testing.T)
 	}
 }
 
+func TestPostgresStoreListPoliciesReturnsFacilityWindowPolicies(t *testing.T) {
+	store := newPostgresStore(t)
+
+	startsAt := time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC)
+	endsAt := time.Date(2026, 4, 4, 13, 0, 0, 0, time.UTC)
+	policyRecord, err := store.CreateFacilityWindowPolicy(context.Background(), CreateFacilityWindowPolicyInput{
+		FacilityID:         "ashtonbee",
+		StartsAt:           startsAt,
+		EndsAt:             endsAt,
+		ReasonCode:         "testing_rollout",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateFacilityWindowPolicy() error = %v", err)
+	}
+
+	activeAt := time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	records, err := store.ListPolicies(context.Background(), "ashtonbee", "", &activeAt)
+	if err != nil {
+		t.Fatalf("ListPolicies() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].PolicyID != policyRecord.PolicyID {
+		t.Fatalf("records[0].PolicyID = %q, want %q", records[0].PolicyID, policyRecord.PolicyID)
+	}
+	if records[0].SubjectID != "" {
+		t.Fatalf("records[0].SubjectID = %q, want empty", records[0].SubjectID)
+	}
+	if records[0].PolicyMode != "facility_window" {
+		t.Fatalf("records[0].PolicyMode = %q, want facility_window", records[0].PolicyMode)
+	}
+	if records[0].TargetSelector != "recognized_denied_only" {
+		t.Fatalf("records[0].TargetSelector = %q, want recognized_denied_only", records[0].TargetSelector)
+	}
+}
+
 func TestPostgresStoreRejectsUnauthorizedAndMalformedWrites(t *testing.T) {
 	store := newPostgresStore(t)
 

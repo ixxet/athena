@@ -357,7 +357,7 @@ func (s *PostgresStore) ListPolicies(ctx context.Context, facilityID, subjectID 
 			SELECT DISTINCT ON (v.policy_id)
 				p.policy_id::text,
 				p.facility_id,
-				COALESCE(p.subject_id::text, ''),
+				COALESCE(p.subject_id::text, '') AS subject_id,
 				v.policy_version_id::text,
 				v.version_number,
 				v.is_enabled,
