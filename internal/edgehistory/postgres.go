@@ -76,7 +76,19 @@ func (s *PostgresStore) RecordObservation(ctx context.Context, record edge.Obser
 		return err
 	}
 
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin edge observation transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := ensureSubjectLinkTx(ctx, tx, record.FacilityID, record.ExternalIdentityHash, record.AccountType); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO athena.edge_observations (
 			observation_id,
 			event_id,
@@ -90,9 +102,10 @@ func (s *PostgresStore) RecordObservation(ctx context.Context, record edge.Obser
 			observed_at,
 			stored_at,
 			account_type,
-			name_present
+			name_present,
+			failure_reason_code
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 		)
 		ON CONFLICT (observation_id) DO NOTHING
 	`,
@@ -109,9 +122,13 @@ func (s *PostgresStore) RecordObservation(ctx context.Context, record edge.Obser
 		record.StoredAt.UTC(),
 		record.AccountType,
 		record.NamePresent,
-	)
-	if err != nil {
+		nullableText(record.FailureReasonCode),
+	); err != nil {
 		return fmt.Errorf("insert edge observation: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit edge observation transaction: %w", err)
 	}
 
 	return nil
@@ -287,10 +304,15 @@ func (s *PostgresStore) ReadPublicObservations(ctx context.Context, filter Publi
 			o.direction,
 			o.result,
 			o.observed_at,
-			c.committed_at
+			c.committed_at,
+			a.accepted_at,
+			COALESCE(a.acceptance_path, ''),
+			COALESCE(a.accepted_reason_code, '')
 		FROM athena.edge_observations o
 		LEFT JOIN athena.edge_observation_commits c
 			ON c.observation_id = o.observation_id
+		LEFT JOIN athena.edge_presence_acceptances a
+			ON a.observation_id = o.observation_id
 		WHERE
 			o.facility_id = $1
 			AND o.observed_at >= $2
@@ -305,20 +327,30 @@ func (s *PostgresStore) ReadPublicObservations(ctx context.Context, filter Publi
 	observations := make([]PublicObservation, 0)
 	for rows.Next() {
 		var (
-			direction   string
-			result      string
-			observedAt  time.Time
-			committedAt *time.Time
+			direction          string
+			result             string
+			observedAt         time.Time
+			committedAt        *time.Time
+			acceptedAt         *time.Time
+			acceptancePathText string
+			acceptedReasonCode string
 		)
-		if err := rows.Scan(&direction, &result, &observedAt, &committedAt); err != nil {
+		if err := rows.Scan(&direction, &result, &observedAt, &committedAt, &acceptedAt, &acceptancePathText, &acceptedReasonCode); err != nil {
 			return nil, fmt.Errorf("scan public edge observation: %w", err)
 		}
+		accepted := acceptedAt != nil || (result == "pass" && committedAt != nil)
+		if acceptancePathText == "" && result == "pass" && committedAt != nil {
+			acceptancePathText = edge.AcceptancePathTouchNetPass
+		}
 		observations = append(observations, PublicObservation{
-			FacilityID: facilityID,
-			Direction:  domain.PresenceDirection(direction),
-			Result:     result,
-			ObservedAt: observedAt.UTC(),
-			Committed:  committedAt != nil,
+			FacilityID:         facilityID,
+			Direction:          domain.PresenceDirection(direction),
+			Result:             result,
+			ObservedAt:         observedAt.UTC(),
+			Committed:          committedAt != nil,
+			Accepted:           accepted,
+			AcceptancePath:     acceptancePathText,
+			AcceptedReasonCode: acceptedReasonCode,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -362,10 +394,16 @@ const observationSelect = `
 		o.stored_at,
 		o.account_type,
 		o.name_present,
-		c.committed_at
+		o.failure_reason_code,
+		c.committed_at,
+		a.accepted_at,
+		COALESCE(a.acceptance_path, ''),
+		COALESCE(a.accepted_reason_code, '')
 	FROM athena.edge_observations o
 	LEFT JOIN athena.edge_observation_commits c
 		ON c.observation_id = o.observation_id
+	LEFT JOIN athena.edge_presence_acceptances a
+		ON a.observation_id = o.observation_id
 `
 
 func collectObservationRows(rows pgx.Rows) ([]edge.ObservationRecord, error) {
@@ -386,10 +424,12 @@ func collectObservationRows(rows pgx.Rows) ([]edge.ObservationRecord, error) {
 
 func scanObservationRow(rows pgx.Rows) (edge.ObservationRecord, error) {
 	var (
-		record      edge.ObservationRecord
-		direction   string
-		source      string
-		committedAt *time.Time
+		record            edge.ObservationRecord
+		direction         string
+		source            string
+		committedAt       *time.Time
+		acceptedAt        *time.Time
+		failureReasonCode *string
 	)
 	if err := rows.Scan(
 		&record.ObservationID,
@@ -405,15 +445,26 @@ func scanObservationRow(rows pgx.Rows) (edge.ObservationRecord, error) {
 		&record.StoredAt,
 		&record.AccountType,
 		&record.NamePresent,
+		&failureReasonCode,
 		&committedAt,
+		&acceptedAt,
+		&record.AcceptancePath,
+		&record.AcceptedReasonCode,
 	); err != nil {
 		return edge.ObservationRecord{}, fmt.Errorf("scan edge observation: %w", err)
 	}
 	record.Direction = domain.PresenceDirection(direction)
 	record.Source = domain.PresenceSource(source)
+	if failureReasonCode != nil {
+		record.FailureReasonCode = strings.TrimSpace(*failureReasonCode)
+	}
 	if committedAt != nil {
 		copy := committedAt.UTC()
 		record.CommittedAt = &copy
+	}
+	if acceptedAt != nil {
+		copy := acceptedAt.UTC()
+		record.AcceptedAt = &copy
 	}
 	record.ObservedAt = record.ObservedAt.UTC()
 	record.StoredAt = record.StoredAt.UTC()
@@ -486,15 +537,17 @@ func loadCommittedObservation(ctx context.Context, tx pgx.Tx, observationID stri
 			observed_at,
 			stored_at,
 			account_type,
-			name_present
+			name_present,
+			failure_reason_code
 		FROM athena.edge_observations
 		WHERE observation_id = $1
 	`, observationID)
 
 	var (
-		record    edge.ObservationRecord
-		direction string
-		source    string
+		record            edge.ObservationRecord
+		direction         string
+		source            string
+		failureReasonCode *string
 	)
 	if err := row.Scan(
 		&record.ObservationID,
@@ -510,6 +563,7 @@ func loadCommittedObservation(ctx context.Context, tx pgx.Tx, observationID stri
 		&record.StoredAt,
 		&record.AccountType,
 		&record.NamePresent,
+		&failureReasonCode,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return edge.ObservationRecord{}, fmt.Errorf("load committed edge observation %q: observation not found", observationID)
@@ -519,6 +573,9 @@ func loadCommittedObservation(ctx context.Context, tx pgx.Tx, observationID stri
 
 	record.Direction = domain.PresenceDirection(direction)
 	record.Source = domain.PresenceSource(source)
+	if failureReasonCode != nil {
+		record.FailureReasonCode = strings.TrimSpace(*failureReasonCode)
+	}
 	record.ObservedAt = record.ObservedAt.UTC()
 	record.StoredAt = record.StoredAt.UTC()
 	return record, nil
@@ -763,6 +820,23 @@ func buildAnalyticsReport(filter AnalyticsFilter, observations []edge.Observatio
 		case "fail":
 			report.ObservationSummary.Fail++
 		}
+		switch observation.FailureReasonCode {
+		case edge.FailureReasonRecognizedDenied:
+			report.ObservationSummary.RecognizedDenied++
+		case edge.FailureReasonBadAccountNumber:
+			report.ObservationSummary.BadAccountNumber++
+		case edge.FailureReasonUnclassifiedFail:
+			report.ObservationSummary.UnclassifiedFail++
+		}
+		if observation.AcceptedAt != nil || (observation.Result == "pass" && observation.CommittedAt != nil) {
+			report.ObservationSummary.Accepted++
+			switch acceptancePath(observation) {
+			case edge.AcceptancePathTouchNetPass:
+				report.ObservationSummary.AcceptedTouchnetPass++
+			case edge.AcceptancePathAlwaysAdmit, edge.AcceptancePathGraceUntil, edge.AcceptancePathFacility:
+				report.ObservationSummary.AcceptedTestingPolicy++
+			}
+		}
 
 		index, ok := nodeIndex[observation.NodeID]
 		if !ok {
@@ -778,6 +852,13 @@ func buildAnalyticsReport(filter AnalyticsFilter, observations []edge.Observatio
 			}
 		} else if observation.Result == "fail" {
 			nodeBreakdown[index].Fail++
+		}
+		if observation.AcceptedAt != nil || (observation.Result == "pass" && observation.CommittedAt != nil) {
+			nodeBreakdown[index].Accepted++
+			switch acceptancePath(observation) {
+			case edge.AcceptancePathAlwaysAdmit, edge.AcceptancePathGraceUntil, edge.AcceptancePathFacility:
+				nodeBreakdown[index].AcceptedTestingPolicy++
+			}
 		}
 
 		bucketIndex := bucketForTime(report.FlowBuckets, observation.ObservedAt)
@@ -810,6 +891,15 @@ func buildAnalyticsReport(filter AnalyticsFilter, observations []edge.Observatio
 		return left.After(right)
 	})
 
+	for _, observation := range observations {
+		if observation.AcceptedAt == nil && !(observation.Result == "pass" && observation.CommittedAt != nil) {
+			continue
+		}
+		if observation.ExternalIdentityHash != "" {
+			visitors[observation.ExternalIdentityHash] = struct{}{}
+		}
+	}
+
 	for _, session := range sessions {
 		if session.ExternalIdentityHash != "" {
 			visitors[session.ExternalIdentityHash] = struct{}{}
@@ -829,10 +919,10 @@ func buildAnalyticsReport(filter AnalyticsFilter, observations []edge.Observatio
 	report.SessionSummary.UniqueVisitors = len(visitors)
 	report.SessionSummary.AverageDurationSeconds = averageDuration(durations)
 	report.SessionSummary.MedianDurationSeconds = medianDuration(durations)
-	report.SessionSummary.OccupancyAtEnd = occupancyAt(filter.Until, sessions)
+	report.SessionSummary.OccupancyAtEnd = occupancyFromAcceptedObservationsAt(filter.Until, observations)
 
 	for index := range report.FlowBuckets {
-		report.FlowBuckets[index].OccupancyEnd = occupancyAt(report.FlowBuckets[index].EndedAt, sessions)
+		report.FlowBuckets[index].OccupancyEnd = occupancyFromAcceptedObservationsAt(report.FlowBuckets[index].EndedAt, observations)
 	}
 
 	sessionLimit := filter.SessionLimit
@@ -919,6 +1009,30 @@ func occupancyAt(at time.Time, sessions []analyticsSessionRow) int {
 			continue
 		}
 		count++
+	}
+	return count
+}
+
+func occupancyFromAcceptedObservationsAt(at time.Time, observations []edge.ObservationRecord) int {
+	count := 0
+	target := at.UTC()
+	for _, observation := range observations {
+		if observation.AcceptedAt == nil && !(observation.Result == "pass" && observation.CommittedAt != nil) {
+			continue
+		}
+		observedAt := observation.ObservedAt.UTC()
+		if observedAt.After(target) {
+			continue
+		}
+		switch observation.Direction {
+		case domain.DirectionIn:
+			count++
+		case domain.DirectionOut:
+			count--
+			if count < 0 {
+				count = 0
+			}
+		}
 	}
 	return count
 }

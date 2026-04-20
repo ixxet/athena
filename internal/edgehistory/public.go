@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ixxet/athena/internal/domain"
+	"github.com/ixxet/athena/internal/edge"
 )
 
 type PublicFilter struct {
@@ -16,11 +17,14 @@ type PublicFilter struct {
 }
 
 type PublicObservation struct {
-	FacilityID string                   `json:"facility_id"`
-	Direction  domain.PresenceDirection `json:"direction"`
-	Result     string                   `json:"result"`
-	ObservedAt time.Time                `json:"observed_at"`
-	Committed  bool                     `json:"committed"`
+	FacilityID         string                   `json:"facility_id"`
+	Direction          domain.PresenceDirection `json:"direction"`
+	Result             string                   `json:"result"`
+	ObservedAt         time.Time                `json:"observed_at"`
+	Committed          bool                     `json:"committed"`
+	Accepted           bool                     `json:"accepted"`
+	AcceptancePath     string                   `json:"acceptance_path,omitempty"`
+	AcceptedReasonCode string                   `json:"accepted_reason_code,omitempty"`
 }
 
 func ReadPublicObservations(path string, filter PublicFilter) ([]PublicObservation, error) {
@@ -63,11 +67,14 @@ func ReadPublicObservations(path string, filter PublicFilter) ([]PublicObservati
 		}
 
 		observations = append(observations, PublicObservation{
-			FacilityID: facilityID,
-			Direction:  record.Direction,
-			Result:     record.Result,
-			ObservedAt: observedAt,
-			Committed:  record.CommittedAt != nil,
+			FacilityID:         facilityID,
+			Direction:          record.Direction,
+			Result:             record.Result,
+			ObservedAt:         observedAt,
+			Committed:          record.CommittedAt != nil,
+			Accepted:           record.AcceptedAt != nil || (record.Result == "pass" && record.CommittedAt != nil),
+			AcceptancePath:     acceptancePath(record),
+			AcceptedReasonCode: record.AcceptedReasonCode,
 		})
 	}
 
@@ -84,4 +91,14 @@ func ReadPublicObservations(path string, filter PublicFilter) ([]PublicObservati
 	})
 
 	return observations, nil
+}
+
+func acceptancePath(record edge.ObservationRecord) string {
+	if strings.TrimSpace(record.AcceptancePath) != "" {
+		return record.AcceptancePath
+	}
+	if record.Result == "pass" && record.CommittedAt != nil {
+		return edge.AcceptancePathTouchNetPass
+	}
+	return ""
 }

@@ -27,10 +27,16 @@ type AnalyticsReport struct {
 }
 
 type ObservationSummary struct {
-	Total         int `json:"total"`
-	Pass          int `json:"pass"`
-	Fail          int `json:"fail"`
-	CommittedPass int `json:"committed_pass"`
+	Total                 int `json:"total"`
+	Pass                  int `json:"pass"`
+	Fail                  int `json:"fail"`
+	CommittedPass         int `json:"committed_pass"`
+	Accepted              int `json:"accepted"`
+	AcceptedTouchnetPass  int `json:"accepted_touchnet_pass"`
+	AcceptedTestingPolicy int `json:"accepted_testing_policy"`
+	RecognizedDenied      int `json:"recognized_denied"`
+	BadAccountNumber      int `json:"bad_account_number"`
+	UnclassifiedFail      int `json:"unclassified_fail"`
 }
 
 type SessionSummary struct {
@@ -54,11 +60,13 @@ type FlowBucket struct {
 }
 
 type NodeBreakdown struct {
-	NodeID        string `json:"node_id"`
-	Total         int    `json:"total"`
-	Pass          int    `json:"pass"`
-	Fail          int    `json:"fail"`
-	CommittedPass int    `json:"committed_pass"`
+	NodeID                string `json:"node_id"`
+	Total                 int    `json:"total"`
+	Pass                  int    `json:"pass"`
+	Fail                  int    `json:"fail"`
+	CommittedPass         int    `json:"committed_pass"`
+	Accepted              int    `json:"accepted"`
+	AcceptedTestingPolicy int    `json:"accepted_testing_policy"`
 }
 
 type SessionFact struct {

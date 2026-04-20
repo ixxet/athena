@@ -24,7 +24,11 @@ type ObservationRecord struct {
 	StoredAt             time.Time                `json:"stored_at"`
 	AccountType          string                   `json:"account_type,omitempty"`
 	NamePresent          bool                     `json:"name_present,omitempty"`
+	FailureReasonCode    string                   `json:"failure_reason_code,omitempty"`
 	CommittedAt          *time.Time               `json:"committed_at,omitempty"`
+	AcceptedAt           *time.Time               `json:"accepted_at,omitempty"`
+	AcceptancePath       string                   `json:"acceptance_path,omitempty"`
+	AcceptedReasonCode   string                   `json:"accepted_reason_code,omitempty"`
 }
 
 type ObservationCommit struct {
@@ -47,6 +51,7 @@ func newObservationRecord(observed observedTap, storedAt time.Time) ObservationR
 		StoredAt:             storedAt.UTC(),
 		AccountType:          observed.accountType,
 		NamePresent:          observed.name != "",
+		FailureReasonCode:    observed.failureReasonCode,
 	}
 	record.ObservationID = record.Identity()
 	return record
@@ -70,6 +75,15 @@ func (r ObservationRecord) PresenceEvent() domain.PresenceEvent {
 	}
 	if r.NamePresent {
 		metadata["name_present"] = strconv.FormatBool(r.NamePresent)
+	}
+	if r.FailureReasonCode != "" {
+		metadata["failure_reason_code"] = r.FailureReasonCode
+	}
+	if r.AcceptancePath != "" {
+		metadata["acceptance_path"] = r.AcceptancePath
+	}
+	if r.AcceptedReasonCode != "" {
+		metadata["accepted_reason_code"] = r.AcceptedReasonCode
 	}
 
 	return domain.PresenceEvent{

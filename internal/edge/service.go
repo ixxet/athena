@@ -50,21 +50,25 @@ type AcceptedTap struct {
 }
 
 type observedTap struct {
-	event         domain.PresenceEvent
-	result        string
-	accountRaw    string
-	accountType   string
-	name          string
-	statusMessage string
-	nodeID        string
+	event             domain.PresenceEvent
+	result            string
+	accountRaw        string
+	accountType       string
+	name              string
+	statusMessage     string
+	failureReasonCode string
+	nodeID            string
 }
 
 type Service struct {
-	publisher           publish.Publisher
-	hashSalt            string
-	tokens              map[string]string
-	projector           ProjectionApplier
-	observationRecorder ObservationRecorder
+	publisher               publish.Publisher
+	hashSalt                string
+	tokens                  map[string]string
+	projector               ProjectionApplier
+	observationRecorder     ObservationRecorder
+	acceptanceRecorder      AcceptedPresenceRecorder
+	policyEvaluator         PolicyEvaluator
+	policyAcceptanceEnabled bool
 }
 
 type ProjectionApplier interface {
@@ -88,6 +92,24 @@ func WithProjection(projector ProjectionApplier) Option {
 func WithObservationRecorder(recorder ObservationRecorder) Option {
 	return func(service *Service) {
 		service.observationRecorder = recorder
+	}
+}
+
+func WithAcceptedPresenceRecorder(recorder AcceptedPresenceRecorder) Option {
+	return func(service *Service) {
+		service.acceptanceRecorder = recorder
+	}
+}
+
+func WithPolicyEvaluator(evaluator PolicyEvaluator) Option {
+	return func(service *Service) {
+		service.policyEvaluator = evaluator
+	}
+}
+
+func WithPolicyAcceptanceEnabled(enabled bool) Option {
+	return func(service *Service) {
+		service.policyAcceptanceEnabled = enabled
 	}
 }
 
@@ -132,6 +154,20 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 	recordedObservation := s.recordObservation(ctx, observed)
 
 	if observed.result != "pass" {
+		if s.policyAcceptanceEnabled && observed.failureReasonCode == FailureReasonRecognizedDenied && s.policyEvaluator != nil {
+			decision, err := s.policyEvaluator.EvaluatePolicy(ctx, PolicyEvaluation{
+				FacilityID:           observed.event.FacilityID,
+				ZoneID:               observed.event.ZoneID,
+				ExternalIdentityHash: observed.event.ExternalIdentityHash,
+				FailureReasonCode:    observed.failureReasonCode,
+				ObservedAt:           observed.event.RecordedAt.UTC(),
+			})
+			if err != nil {
+				slog.Error("edge policy evaluation failed", append(s.logFields(observed), "error", err)...)
+			} else if decision.Admitted {
+				return s.acceptObservedEvent(ctx, observed, recordedObservation, decision)
+			}
+		}
 		s.logObservedTap("edge tap observed", observed, false, "")
 		return AcceptedTap{
 			EventID:   observed.event.ID,
@@ -142,75 +178,12 @@ func (s *Service) AcceptTap(ctx context.Context, token string, req TapRequest) (
 		}, nil
 	}
 
-	if s.projector != nil {
-		message, include, err := publish.BuildMessage(observed.event)
-		if err != nil {
-			return AcceptedTap{}, &ValidationError{message: err.Error()}
-		}
-		if !include {
-			return AcceptedTap{}, &ValidationError{message: "identified presence event is missing an external identity hash"}
-		}
-
-		projection, err := s.projector.ApplyWithEffect(ctx, observed.event, func() error {
-			if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
-				return fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
-			}
-			return nil
-		})
-		if err != nil {
-			slog.Error("edge tap projection failed", append(s.logFields(observed), "error", err)...)
-			if errors.Is(err, ErrPublishUnavailable) {
-				return AcceptedTap{}, err
-			}
-			return AcceptedTap{}, fmt.Errorf("apply live occupancy projection: %w", err)
-		}
-		if !projection.Applied {
-			s.logObservedTap("edge tap observed", observed, false, projection.Reason)
-			return AcceptedTap{
-				EventID:   observed.event.ID,
-				Status:    "observed",
-				Result:    observed.result,
-				Direction: string(observed.event.Direction),
-				Published: false,
-			}, nil
-		}
-		s.logAcceptedTap(observed, message.Subject)
-		s.recordCommittedPass(ctx, observed, recordedObservation)
-
-		return AcceptedTap{
-			EventID:   observed.event.ID,
-			Subject:   message.Subject,
-			Status:    "accepted",
-			Result:    observed.result,
-			Direction: string(observed.event.Direction),
-			Published: true,
-		}, nil
-	}
-
-	message, include, err := publish.BuildMessage(observed.event)
-	if err != nil {
-		return AcceptedTap{}, &ValidationError{message: err.Error()}
-	}
-	if !include {
-		return AcceptedTap{}, &ValidationError{message: "identified presence event is missing an external identity hash"}
-	}
-
-	if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
-		slog.Error("edge tap publish failed", append(s.logFields(observed), "error", err)...)
-		return AcceptedTap{}, fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
-	}
-
-	s.logAcceptedTap(observed, message.Subject)
-	s.recordCommittedPass(ctx, observed, recordedObservation)
-
-	return AcceptedTap{
-		EventID:   observed.event.ID,
-		Subject:   message.Subject,
-		Status:    "accepted",
-		Result:    observed.result,
-		Direction: string(observed.event.Direction),
-		Published: true,
-	}, nil
+	return s.acceptObservedEvent(ctx, observed, recordedObservation, PolicyDecision{
+		Admitted:           true,
+		AcceptancePath:     AcceptancePathTouchNetPass,
+		AcceptedReasonCode: "",
+		PolicyVersionID:    "",
+	})
 }
 
 func (s *Service) normalizeRequest(req TapRequest) (observedTap, error) {
@@ -276,12 +249,13 @@ func (s *Service) normalizeRequest(req TapRequest) (observedTap, error) {
 				"status_message": strings.TrimSpace(req.StatusMessage),
 			},
 		},
-		result:        result,
-		accountRaw:    accountRaw,
-		accountType:   strings.TrimSpace(req.AccountType),
-		name:          strings.TrimSpace(req.Name),
-		statusMessage: strings.TrimSpace(req.StatusMessage),
-		nodeID:        nodeID,
+		result:            result,
+		accountRaw:        accountRaw,
+		accountType:       strings.TrimSpace(req.AccountType),
+		name:              strings.TrimSpace(req.Name),
+		statusMessage:     strings.TrimSpace(req.StatusMessage),
+		failureReasonCode: deriveFailureReasonCode(result, strings.TrimSpace(req.Name), strings.TrimSpace(req.StatusMessage)),
+		nodeID:            nodeID,
 	}, nil
 }
 
@@ -293,8 +267,8 @@ func (s *Service) logObservedTap(message string, observed observedTap, published
 	slog.Info(message, args...)
 }
 
-func (s *Service) logAcceptedTap(observed observedTap, subject string) {
-	slog.Info("edge tap accepted", append(s.logFields(observed), "published", true, "subject", subject)...)
+func (s *Service) logAcceptedTap(observed observedTap, subject, acceptancePath string) {
+	slog.Info("edge tap accepted", append(s.logFields(observed), "published", true, "subject", subject, "acceptance_path", acceptancePath)...)
 }
 
 func (s *Service) recordObservation(ctx context.Context, observed observedTap) *ObservationRecord {
@@ -328,11 +302,106 @@ func (s *Service) logFields(observed observedTap) []any {
 		"node_id", observed.nodeID,
 		"direction", observed.event.Direction,
 		"result", observed.result,
+		"failure_reason_code", observed.failureReasonCode,
 		"external_identity_hash", observed.event.ExternalIdentityHash,
 		"account_type", observed.accountType,
 		"name_present", observed.name != "",
 		"status_message_present", observed.statusMessage != "",
 	}
+}
+
+func (s *Service) acceptObservedEvent(ctx context.Context, observed observedTap, record *ObservationRecord, decision PolicyDecision) (AcceptedTap, error) {
+	message, include, err := publish.BuildMessage(observed.event)
+	if err != nil {
+		return AcceptedTap{}, &ValidationError{message: err.Error()}
+	}
+	if !include {
+		return AcceptedTap{}, &ValidationError{message: "identified presence event is missing an external identity hash"}
+	}
+
+	if s.projector != nil {
+		projection, err := s.projector.ApplyWithEffect(ctx, observed.event, func() error {
+			if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
+				return fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
+			}
+			return nil
+		})
+		if err != nil {
+			slog.Error("edge tap projection failed", append(s.logFields(observed), "error", err)...)
+			if errors.Is(err, ErrPublishUnavailable) {
+				return AcceptedTap{}, err
+			}
+			return AcceptedTap{}, fmt.Errorf("apply live occupancy projection: %w", err)
+		}
+		if !projection.Applied {
+			s.logObservedTap("edge tap observed", observed, false, projection.Reason)
+			return AcceptedTap{
+				EventID:   observed.event.ID,
+				Status:    "observed",
+				Result:    observed.result,
+				Direction: string(observed.event.Direction),
+				Published: false,
+			}, nil
+		}
+	} else {
+		if err := s.publisher.Publish(ctx, message.Subject, message.Payload); err != nil {
+			slog.Error("edge tap publish failed", append(s.logFields(observed), "error", err)...)
+			return AcceptedTap{}, fmt.Errorf("%w: %v", ErrPublishUnavailable, err)
+		}
+	}
+
+	s.logAcceptedTap(observed, message.Subject, decision.AcceptancePath)
+	if decision.AcceptancePath == AcceptancePathTouchNetPass {
+		s.recordCommittedPass(ctx, observed, record)
+	}
+	s.recordAcceptedPresence(ctx, observed, record, decision)
+
+	return AcceptedTap{
+		EventID:   observed.event.ID,
+		Subject:   message.Subject,
+		Status:    "accepted",
+		Result:    observed.result,
+		Direction: string(observed.event.Direction),
+		Published: true,
+	}, nil
+}
+
+func (s *Service) recordAcceptedPresence(ctx context.Context, observed observedTap, record *ObservationRecord, decision PolicyDecision) {
+	if s.acceptanceRecorder == nil || record == nil {
+		return
+	}
+
+	acceptance := PresenceAcceptance{
+		ObservationID:        record.Identity(),
+		EventID:              observed.event.ID,
+		FacilityID:           observed.event.FacilityID,
+		ZoneID:               observed.event.ZoneID,
+		ExternalIdentityHash: observed.event.ExternalIdentityHash,
+		Direction:            observed.event.Direction,
+		AcceptedAt:           time.Now().UTC(),
+		AcceptancePath:       decision.AcceptancePath,
+		AcceptedReasonCode:   decision.AcceptedReasonCode,
+		PolicyVersionID:      decision.PolicyVersionID,
+	}
+	if err := s.acceptanceRecorder.RecordAcceptance(ctx, acceptance); err != nil {
+		slog.Error("edge accepted presence durable write failed", append(s.logFields(observed), "acceptance_path", decision.AcceptancePath, "error", err)...)
+	}
+}
+
+func deriveFailureReasonCode(result, name, statusMessage string) string {
+	if result != "fail" {
+		return ""
+	}
+	if strings.TrimSpace(name) != "" {
+		return FailureReasonRecognizedDenied
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(statusMessage))
+	if strings.Contains(normalized, "bad account") {
+		return FailureReasonBadAccountNumber
+	}
+
+	return FailureReasonUnclassifiedFail
 }
 
 func (s *Service) authorize(nodeID, token string) error {

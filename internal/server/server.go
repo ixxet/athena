@@ -31,10 +31,13 @@ type healthResponse struct {
 }
 
 type historyObservationResponse struct {
-	Direction  string `json:"direction"`
-	Result     string `json:"result"`
-	ObservedAt string `json:"observed_at"`
-	Committed  bool   `json:"committed"`
+	Direction          string `json:"direction"`
+	Result             string `json:"result"`
+	ObservedAt         string `json:"observed_at"`
+	Committed          bool   `json:"committed"`
+	Accepted           bool   `json:"accepted"`
+	AcceptancePath     string `json:"acceptance_path,omitempty"`
+	AcceptedReasonCode string `json:"accepted_reason_code,omitempty"`
 }
 
 type historyResponse struct {
@@ -178,10 +181,13 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 		payload := make([]historyObservationResponse, 0, len(observations))
 		for _, observation := range observations {
 			payload = append(payload, historyObservationResponse{
-				Direction:  string(observation.Direction),
-				Result:     observation.Result,
-				ObservedAt: observation.ObservedAt.UTC().Format(time.RFC3339),
-				Committed:  observation.Committed,
+				Direction:          string(observation.Direction),
+				Result:             observation.Result,
+				ObservedAt:         observation.ObservedAt.UTC().Format(time.RFC3339),
+				Committed:          observation.Committed,
+				Accepted:           observation.Accepted,
+				AcceptancePath:     observation.AcceptancePath,
+				AcceptedReasonCode: observation.AcceptedReasonCode,
 			})
 		}
 

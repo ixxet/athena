@@ -18,6 +18,7 @@ type Config struct {
 	EdgeHashSalt                     string
 	EdgeTokens                       map[string]string
 	EdgeOccupancyProjection          bool
+	EdgePolicyAcceptanceEnabled      bool
 	EdgeProjectorAbsentRetention     time.Duration
 	EdgeProjectorMaxAbsentIdentities int
 	EdgeObservationHistoryPath       string
@@ -55,6 +56,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	edgePolicyAcceptanceEnabled, err := getEnvAsBool("ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 
 	edgeProjectorAbsentRetention, err := getEnvAsDuration("ATHENA_EDGE_PROJECTOR_ABSENT_RETENTION", presence.DefaultAbsentIdentityRetention)
 	if err != nil {
@@ -79,6 +84,7 @@ func Load() (Config, error) {
 		EdgeHashSalt:                     getEnv("ATHENA_EDGE_HASH_SALT", ""),
 		EdgeTokens:                       parseNodeTokenMap(getEnv("ATHENA_EDGE_TOKENS", "")),
 		EdgeOccupancyProjection:          edgeProjection,
+		EdgePolicyAcceptanceEnabled:      edgePolicyAcceptanceEnabled,
 		EdgeProjectorAbsentRetention:     edgeProjectorAbsentRetention,
 		EdgeProjectorMaxAbsentIdentities: edgeProjectorMaxAbsentIdentities,
 		EdgeObservationHistoryPath:       getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
@@ -226,6 +232,9 @@ func parseNodeTokenMap(value string) map[string]string {
 func validateEdgeConfig(cfg Config) error {
 	if cfg.EdgePostgresDSN != "" && cfg.EdgeObservationHistoryPath != "" {
 		return fmt.Errorf("ATHENA_EDGE_POSTGRES_DSN and ATHENA_EDGE_OBSERVATION_HISTORY_PATH are mutually exclusive")
+	}
+	if cfg.EdgePolicyAcceptanceEnabled && strings.TrimSpace(cfg.EdgePostgresDSN) == "" {
+		return fmt.Errorf("ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED requires ATHENA_EDGE_POSTGRES_DSN")
 	}
 	if cfg.EdgeOccupancyProjection && cfg.EdgeHashSalt == "" && len(cfg.EdgeTokens) == 0 {
 		return fmt.Errorf("ATHENA_EDGE_OCCUPANCY_PROJECTION requires edge ingress to be enabled")

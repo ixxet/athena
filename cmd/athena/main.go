@@ -46,14 +46,16 @@ type app struct {
 }
 
 type edgeRuntime struct {
-	backend         string
-	recorder        edgeingress.ObservationRecorder
-	markerReader    edgehistory.MarkerReader
-	replayReader    edgehistory.ReplayReader
-	historyReader   edgehistory.PublicObservationReader
-	recentReader    edgehistory.RecentObservationReader
-	analyticsReader edgehistory.AnalyticsReader
-	close           func()
+	backend            string
+	recorder           edgeingress.ObservationRecorder
+	acceptanceRecorder edgeingress.AcceptedPresenceRecorder
+	policyEvaluator    edgeingress.PolicyEvaluator
+	markerReader       edgehistory.MarkerReader
+	replayReader       edgehistory.ReplayReader
+	historyReader      edgehistory.PublicObservationReader
+	recentReader       edgehistory.RecentObservationReader
+	analyticsReader    edgehistory.AnalyticsReader
+	close              func()
 }
 
 var newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
@@ -91,6 +93,8 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newPresenceCmd())
 	rootCmd.AddCommand(newFacilityCmd())
 	rootCmd.AddCommand(newEdgeCmd())
+	rootCmd.AddCommand(newPolicyCmd())
+	rootCmd.AddCommand(newIdentityCmd())
 
 	return rootCmd
 }
@@ -165,6 +169,15 @@ func newServeCmd() *cobra.Command {
 				if edgeStores.recorder != nil {
 					edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(edgeStores.recorder))
 				}
+				if edgeStores.acceptanceRecorder != nil {
+					edgeOpts = append(edgeOpts, edgeingress.WithAcceptedPresenceRecorder(edgeStores.acceptanceRecorder))
+				}
+				if cfg.EdgePolicyAcceptanceEnabled && edgeStores.policyEvaluator != nil {
+					edgeOpts = append(edgeOpts,
+						edgeingress.WithPolicyEvaluator(edgeStores.policyEvaluator),
+						edgeingress.WithPolicyAcceptanceEnabled(true),
+					)
+				}
 				edgeService, err := edgeingress.NewService(
 					publisher,
 					cfg.EdgeHashSalt,
@@ -220,6 +233,15 @@ func newServeCmd() *cobra.Command {
 					edgeOpts := make([]edgeingress.Option, 0, 1)
 					if edgeStores.recorder != nil {
 						edgeOpts = append(edgeOpts, edgeingress.WithObservationRecorder(edgeStores.recorder))
+					}
+					if edgeStores.acceptanceRecorder != nil {
+						edgeOpts = append(edgeOpts, edgeingress.WithAcceptedPresenceRecorder(edgeStores.acceptanceRecorder))
+					}
+					if cfg.EdgePolicyAcceptanceEnabled && edgeStores.policyEvaluator != nil {
+						edgeOpts = append(edgeOpts,
+							edgeingress.WithPolicyEvaluator(edgeStores.policyEvaluator),
+							edgeingress.WithPolicyAcceptanceEnabled(true),
+						)
 					}
 					edgeService, err := edgeingress.NewService(publisher, cfg.EdgeHashSalt, cfg.EdgeTokens, edgeOpts...)
 					if err != nil {
@@ -720,13 +742,17 @@ func newEdgeCmd() *cobra.Command {
 				for _, record := range records {
 					if _, err := fmt.Fprintf(
 						cmd.OutOrStdout(),
-						"event_id=%s facility_id=%s zone_id=%s node_id=%s direction=%s result=%s external_identity_hash=%s observed_at=%s stored_at=%s\n",
+						"event_id=%s facility_id=%s zone_id=%s node_id=%s direction=%s result=%s failure_reason_code=%s accepted=%t acceptance_path=%s accepted_reason_code=%s external_identity_hash=%s observed_at=%s stored_at=%s\n",
 						record.EventID,
 						record.FacilityID,
 						record.ZoneID,
 						record.NodeID,
 						record.Direction,
 						record.Result,
+						record.FailureReasonCode,
+						record.AcceptedAt != nil || (record.Result == "pass" && record.CommittedAt != nil),
+						effectiveAcceptancePath(record),
+						record.AcceptedReasonCode,
 						record.ExternalIdentityHash,
 						record.ObservedAt.Format("2006-01-02T15:04:05Z07:00"),
 						record.StoredAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -799,7 +825,7 @@ func newEdgeCmd() *cobra.Command {
 			case "text":
 				if _, err := fmt.Fprintf(
 					cmd.OutOrStdout(),
-					"facility=%s zone=%s node=%s since=%s until=%s total=%d pass=%d fail=%d committed_pass=%d open_sessions=%d closed_sessions=%d unmatched_exit=%d unique_visitors=%d occupancy_at_end=%d average_duration_seconds=%d median_duration_seconds=%d\n",
+					"facility=%s zone=%s node=%s since=%s until=%s total=%d pass=%d fail=%d committed_pass=%d accepted=%d accepted_touchnet_pass=%d accepted_testing_policy=%d recognized_denied=%d bad_account_number=%d open_sessions=%d closed_sessions=%d unmatched_exit=%d unique_visitors=%d occupancy_at_end=%d average_duration_seconds=%d median_duration_seconds=%d\n",
 					report.FacilityID,
 					report.ZoneID,
 					report.NodeID,
@@ -809,6 +835,11 @@ func newEdgeCmd() *cobra.Command {
 					report.ObservationSummary.Pass,
 					report.ObservationSummary.Fail,
 					report.ObservationSummary.CommittedPass,
+					report.ObservationSummary.Accepted,
+					report.ObservationSummary.AcceptedTouchnetPass,
+					report.ObservationSummary.AcceptedTestingPolicy,
+					report.ObservationSummary.RecognizedDenied,
+					report.ObservationSummary.BadAccountNumber,
 					report.SessionSummary.OpenCount,
 					report.SessionSummary.ClosedCount,
 					report.SessionSummary.UnmatchedExitCount,
@@ -870,6 +901,407 @@ func newEdgeCmd() *cobra.Command {
 
 	edgeCmd.AddCommand(analyticsCmd)
 	return edgeCmd
+}
+
+func newPolicyCmd() *cobra.Command {
+	policyCmd := &cobra.Command{
+		Use:   "policy",
+		Short: "Manage ATHENA edge admission policies.",
+	}
+
+	var (
+		postgresDSN string
+		facilityID  string
+		subjectID   string
+		startsAt    string
+		endsAt      string
+		reasonCode  string
+		actorKind   string
+		actorID     string
+		format      string
+	)
+
+	createFacilityCmd := &cobra.Command{
+		Use:   "create-facility-window",
+		Short: "Create a facility-wide recognized-denied testing policy window.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			start, err := parseRFC3339Value(startsAt, "--starts-at")
+			if err != nil {
+				return err
+			}
+			end, err := parseRFC3339Value(endsAt, "--ends-at")
+			if err != nil {
+				return err
+			}
+			record, err := store.CreateFacilityWindowPolicy(cmd.Context(), edgehistory.CreateFacilityWindowPolicyInput{
+				FacilityID:         facilityID,
+				StartsAt:           start,
+				EndsAt:             end,
+				ReasonCode:         reasonCode,
+				CreatedByActorKind: actorKind,
+				CreatedByActorID:   actorID,
+				CreatedBySurface:   "athena_cli",
+			})
+			if err != nil {
+				return err
+			}
+			return writePolicyRecord(cmd, record, format)
+		},
+	}
+	createFacilityCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	createFacilityCmd.Flags().StringVar(&facilityID, "facility", "", "facility id to apply the policy to")
+	createFacilityCmd.Flags().StringVar(&startsAt, "starts-at", "", "policy start time in RFC3339")
+	createFacilityCmd.Flags().StringVar(&endsAt, "ends-at", "", "policy end time in RFC3339")
+	createFacilityCmd.Flags().StringVar(&reasonCode, "reason-code", "testing_rollout", "reason code: testing_rollout, alumni_exception, semester_rollover, owner_exception")
+	createFacilityCmd.Flags().StringVar(&actorKind, "actor-kind", "owner_user", "actor kind: owner_user, service_account, system")
+	createFacilityCmd.Flags().StringVar(&actorID, "actor-id", os.Getenv("USER"), "actor id to record on the policy version")
+	createFacilityCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = createFacilityCmd.MarkFlagRequired("facility")
+	_ = createFacilityCmd.MarkFlagRequired("starts-at")
+	_ = createFacilityCmd.MarkFlagRequired("ends-at")
+	policyCmd.AddCommand(createFacilityCmd)
+
+	var subjectMode string
+	createSubjectCmd := &cobra.Command{
+		Use:   "create-subject",
+		Short: "Create a subject-scoped admission policy.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			start, err := parseRFC3339Value(startsAt, "--starts-at")
+			if err != nil {
+				return err
+			}
+			var endPtr *time.Time
+			if strings.TrimSpace(endsAt) != "" {
+				end, err := parseRFC3339Value(endsAt, "--ends-at")
+				if err != nil {
+					return err
+				}
+				endPtr = &end
+			}
+			record, err := store.CreateSubjectPolicy(cmd.Context(), edgehistory.CreateSubjectPolicyInput{
+				FacilityID:         facilityID,
+				SubjectID:          subjectID,
+				PolicyMode:         subjectMode,
+				StartsAt:           start,
+				EndsAt:             endPtr,
+				ReasonCode:         reasonCode,
+				CreatedByActorKind: actorKind,
+				CreatedByActorID:   actorID,
+				CreatedBySurface:   "athena_cli",
+			})
+			if err != nil {
+				return err
+			}
+			return writePolicyRecord(cmd, record, format)
+		},
+	}
+	createSubjectCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	createSubjectCmd.Flags().StringVar(&facilityID, "facility", "", "facility id to apply the policy to")
+	createSubjectCmd.Flags().StringVar(&subjectID, "subject-id", "", "subject id to apply the policy to")
+	createSubjectCmd.Flags().StringVar(&subjectMode, "mode", "always_admit", "policy mode: always_admit or grace_until")
+	createSubjectCmd.Flags().StringVar(&startsAt, "starts-at", "", "policy start time in RFC3339")
+	createSubjectCmd.Flags().StringVar(&endsAt, "ends-at", "", "policy end time in RFC3339; required for grace_until")
+	createSubjectCmd.Flags().StringVar(&reasonCode, "reason-code", "owner_exception", "reason code: testing_rollout, alumni_exception, semester_rollover, owner_exception")
+	createSubjectCmd.Flags().StringVar(&actorKind, "actor-kind", "owner_user", "actor kind: owner_user, service_account, system")
+	createSubjectCmd.Flags().StringVar(&actorID, "actor-id", os.Getenv("USER"), "actor id to record on the policy version")
+	createSubjectCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = createSubjectCmd.MarkFlagRequired("facility")
+	_ = createSubjectCmd.MarkFlagRequired("subject-id")
+	_ = createSubjectCmd.MarkFlagRequired("starts-at")
+	policyCmd.AddCommand(createSubjectCmd)
+
+	var policyID string
+	disableCmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable a policy by inserting a new disabled version.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			record, err := store.DisablePolicy(cmd.Context(), edgehistory.DisablePolicyInput{
+				PolicyID:           policyID,
+				CreatedByActorKind: actorKind,
+				CreatedByActorID:   actorID,
+				CreatedBySurface:   "athena_cli",
+			})
+			if err != nil {
+				return err
+			}
+			return writePolicyRecord(cmd, record, format)
+		},
+	}
+	disableCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	disableCmd.Flags().StringVar(&policyID, "policy-id", "", "policy id to disable")
+	disableCmd.Flags().StringVar(&actorKind, "actor-kind", "owner_user", "actor kind: owner_user, service_account, system")
+	disableCmd.Flags().StringVar(&actorID, "actor-id", os.Getenv("USER"), "actor id to record on the policy version")
+	disableCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = disableCmd.MarkFlagRequired("policy-id")
+	policyCmd.AddCommand(disableCmd)
+
+	var activeAt string
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List the latest edge admission policies for a facility.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			var activeAtPtr *time.Time
+			if strings.TrimSpace(activeAt) != "" {
+				parsed, err := parseRFC3339Value(activeAt, "--active-at")
+				if err != nil {
+					return err
+				}
+				activeAtPtr = &parsed
+			}
+			records, err := store.ListPolicies(cmd.Context(), facilityID, subjectID, activeAtPtr)
+			if err != nil {
+				return err
+			}
+			switch format {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(records)
+			case "text":
+				for _, record := range records {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"policy_id=%s policy_version_id=%s facility_id=%s subject_id=%s version=%d enabled=%t mode=%s target_selector=%s starts_at=%s ends_at=%s reason_code=%s actor_kind=%s actor_id=%s surface=%s created_at=%s\n",
+						record.PolicyID,
+						record.PolicyVersionID,
+						record.FacilityID,
+						record.SubjectID,
+						record.VersionNumber,
+						record.IsEnabled,
+						record.PolicyMode,
+						record.TargetSelector,
+						record.StartsAt.Format(time.RFC3339),
+						formatOptionalTime(record.EndsAt),
+						record.ReasonCode,
+						record.CreatedByActorKind,
+						record.CreatedByActorID,
+						record.CreatedBySurface,
+						record.CreatedAt.Format(time.RFC3339),
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", format)
+			}
+		},
+	}
+	listCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	listCmd.Flags().StringVar(&facilityID, "facility", "", "facility id to list policies for")
+	listCmd.Flags().StringVar(&subjectID, "subject-id", "", "optional subject id to filter by")
+	listCmd.Flags().StringVar(&activeAt, "active-at", "", "optional RFC3339 time to filter to active policies only")
+	listCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = listCmd.MarkFlagRequired("facility")
+	policyCmd.AddCommand(listCmd)
+
+	return policyCmd
+}
+
+func newIdentityCmd() *cobra.Command {
+	identityCmd := &cobra.Command{
+		Use:   "identity",
+		Short: "Inspect and extend ATHENA edge identity subjects.",
+	}
+
+	subjectCmd := &cobra.Command{
+		Use:   "subject",
+		Short: "Inspect edge identity subjects.",
+	}
+
+	var (
+		postgresDSN          string
+		facilityID           string
+		subjectID            string
+		externalIdentityHash string
+		format               string
+	)
+	showCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show one facility-local edge identity subject.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			record, ok, err := store.GetIdentitySubject(cmd.Context(), facilityID, subjectID, externalIdentityHash)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("identity subject not found")
+			}
+			switch format {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(record)
+			case "text":
+				if _, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"subject_id=%s facility_id=%s created_at=%s\n",
+					record.SubjectID,
+					record.FacilityID,
+					record.CreatedAt.Format(time.RFC3339),
+				); err != nil {
+					return err
+				}
+				for _, link := range record.Links {
+					if _, err := fmt.Fprintf(
+						cmd.OutOrStdout(),
+						"link_id=%s kind=%s key=%s source=%s account_type=%s created_at=%s\n",
+						link.LinkID,
+						link.LinkKind,
+						link.LinkKey,
+						link.LinkSource,
+						link.AccountType,
+						link.CreatedAt.Format(time.RFC3339),
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			default:
+				return fmt.Errorf("unsupported format %q", format)
+			}
+		},
+	}
+	showCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	showCmd.Flags().StringVar(&facilityID, "facility", "", "facility id for the subject")
+	showCmd.Flags().StringVar(&subjectID, "subject-id", "", "subject id to show")
+	showCmd.Flags().StringVar(&externalIdentityHash, "external-identity-hash", "", "resolve the subject by hashed identity")
+	showCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = showCmd.MarkFlagRequired("facility")
+	subjectCmd.AddCommand(showCmd)
+
+	identityCmd.AddCommand(subjectCmd)
+
+	linkCmd := &cobra.Command{
+		Use:   "link",
+		Short: "Manage edge identity links.",
+	}
+
+	var (
+		linkKind    string
+		linkKey     string
+		linkSource  string
+		accountType string
+	)
+	addLinkCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Attach a privacy-safe link to a facility-local subject.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			if err := store.AddIdentityLink(cmd.Context(), facilityID, subjectID, linkKind, linkKey, linkSource, accountType); err != nil {
+				return err
+			}
+			record, ok, err := store.GetIdentitySubject(cmd.Context(), facilityID, subjectID, "")
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("identity subject not found after link add")
+			}
+			switch format {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(record)
+			case "text":
+				_, err := fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"subject_id=%s facility_id=%s link_kind=%s link_key=%s link_source=%s account_type=%s\n",
+					record.SubjectID,
+					record.FacilityID,
+					linkKind,
+					linkKey,
+					linkSource,
+					accountType,
+				)
+				return err
+			default:
+				return fmt.Errorf("unsupported format %q", format)
+			}
+		},
+	}
+	addLinkCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge store")
+	addLinkCmd.Flags().StringVar(&facilityID, "facility", "", "facility id for the subject")
+	addLinkCmd.Flags().StringVar(&subjectID, "subject-id", "", "subject id to extend")
+	addLinkCmd.Flags().StringVar(&linkKind, "kind", "member_account", "link kind: external_identity_hash, member_account, qr_identity")
+	addLinkCmd.Flags().StringVar(&linkKey, "key", "", "privacy-safe link key")
+	addLinkCmd.Flags().StringVar(&linkSource, "source", "owner_confirmed", "link source: automatic_observation, self_signup, owner_confirmed, trusted_import")
+	addLinkCmd.Flags().StringVar(&accountType, "account-type", "", "optional account type label")
+	addLinkCmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	_ = addLinkCmd.MarkFlagRequired("facility")
+	_ = addLinkCmd.MarkFlagRequired("subject-id")
+	_ = addLinkCmd.MarkFlagRequired("key")
+	linkCmd.AddCommand(addLinkCmd)
+
+	identityCmd.AddCommand(linkCmd)
+	return identityCmd
+}
+
+func writePolicyRecord(cmd *cobra.Command, record edgehistory.PolicyRecord, format string) error {
+	switch format {
+	case "json":
+		encoder := json.NewEncoder(cmd.OutOrStdout())
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(record)
+	case "text":
+		_, err := fmt.Fprintf(
+			cmd.OutOrStdout(),
+			"policy_id=%s policy_version_id=%s facility_id=%s subject_id=%s version=%d enabled=%t mode=%s target_selector=%s starts_at=%s ends_at=%s reason_code=%s actor_kind=%s actor_id=%s surface=%s created_at=%s\n",
+			record.PolicyID,
+			record.PolicyVersionID,
+			record.FacilityID,
+			record.SubjectID,
+			record.VersionNumber,
+			record.IsEnabled,
+			record.PolicyMode,
+			record.TargetSelector,
+			record.StartsAt.Format(time.RFC3339),
+			formatOptionalTime(record.EndsAt),
+			record.ReasonCode,
+			record.CreatedByActorKind,
+			record.CreatedByActorID,
+			record.CreatedBySurface,
+			record.CreatedAt.Format(time.RFC3339),
+		)
+		return err
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
 }
 
 func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
@@ -967,14 +1399,16 @@ func openEdgeRuntime(ctx context.Context, cfg config.Config) (edgeRuntime, error
 			return edgeRuntime{}, err
 		}
 		return edgeRuntime{
-			backend:         "postgres",
-			recorder:        store,
-			markerReader:    store,
-			replayReader:    store,
-			historyReader:   store,
-			recentReader:    store,
-			analyticsReader: store,
-			close:           store.Close,
+			backend:            "postgres",
+			recorder:           store,
+			acceptanceRecorder: store,
+			policyEvaluator:    store,
+			markerReader:       store,
+			replayReader:       store,
+			historyReader:      store,
+			recentReader:       store,
+			analyticsReader:    store,
+			close:              store.Close,
 		}, nil
 	case strings.TrimSpace(cfg.EdgeObservationHistoryPath) != "":
 		store, err := edgehistory.NewFileStore(cfg.EdgeObservationHistoryPath)
@@ -1066,4 +1500,14 @@ func formatOptionalInt64(value *int64) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", *value)
+}
+
+func effectiveAcceptancePath(record edgeingress.ObservationRecord) string {
+	if strings.TrimSpace(record.AcceptancePath) != "" {
+		return record.AcceptancePath
+	}
+	if record.Result == "pass" && record.CommittedAt != nil {
+		return edgeingress.AcceptancePathTouchNetPass
+	}
+	return ""
 }

@@ -298,7 +298,7 @@ func ReplayProjector(projector *presence.Projector, records []edge.ObservationRe
 		switch record.Result {
 		case "pass":
 			result.Pass++
-			if record.CommittedAt == nil {
+			if record.AcceptedAt == nil && record.CommittedAt == nil {
 				result.Observed++
 				continue
 			}
@@ -313,6 +313,18 @@ func ReplayProjector(projector *presence.Projector, records []edge.ObservationRe
 			}
 		case "fail":
 			result.Fail++
+			if record.AcceptedAt == nil {
+				continue
+			}
+			projection, err := projector.Apply(record.PresenceEvent())
+			if err != nil {
+				return result, fmt.Errorf("apply accepted fail edge observation %q: %w", record.EventID, err)
+			}
+			if projection.Applied {
+				result.Applied++
+			} else {
+				result.Observed++
+			}
 		default:
 			return result, fmt.Errorf("unsupported result %q for edge observation %q", record.Result, record.EventID)
 		}
@@ -595,6 +607,19 @@ func validateRecord(record edge.ObservationRecord) error {
 	}
 	if record.Result != "pass" && record.Result != "fail" {
 		return fmt.Errorf("result %q must be one of pass,fail", record.Result)
+	}
+	if record.Result == "pass" && strings.TrimSpace(record.FailureReasonCode) != "" {
+		return fmt.Errorf("failure_reason_code must be empty when result=pass")
+	}
+	if record.Result == "fail" {
+		if strings.TrimSpace(record.FailureReasonCode) == "" {
+			return nil
+		}
+		switch record.FailureReasonCode {
+		case edge.FailureReasonBadAccountNumber, edge.FailureReasonRecognizedDenied, edge.FailureReasonUnclassifiedFail:
+		default:
+			return fmt.Errorf("failure_reason_code %q must be one of bad_account_number,recognized_denied,unclassified_fail when result=fail", record.FailureReasonCode)
+		}
 	}
 
 	return nil

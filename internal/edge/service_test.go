@@ -24,9 +24,15 @@ type stubPublisher struct {
 }
 
 type stubObservationRecorder struct {
-	records []ObservationRecord
-	commits []ObservationCommit
-	err     error
+	records     []ObservationRecord
+	commits     []ObservationCommit
+	acceptances []PresenceAcceptance
+	err         error
+}
+
+type stubPolicyEvaluator struct {
+	decision PolicyDecision
+	err      error
 }
 
 type publishedMessage struct {
@@ -77,6 +83,22 @@ func (s *stubObservationRecorder) RecordCommit(_ context.Context, commit Observa
 
 	s.commits = append(s.commits, commit)
 	return nil
+}
+
+func (s *stubObservationRecorder) RecordAcceptance(_ context.Context, acceptance PresenceAcceptance) error {
+	if s.err != nil {
+		return s.err
+	}
+
+	s.acceptances = append(s.acceptances, acceptance)
+	return nil
+}
+
+func (s *stubPolicyEvaluator) EvaluatePolicy(_ context.Context, _ PolicyEvaluation) (PolicyDecision, error) {
+	if s.err != nil {
+		return PolicyDecision{}, s.err
+	}
+	return s.decision, nil
 }
 
 func TestAcceptTapPublishesRFIDArrival(t *testing.T) {
@@ -185,6 +207,91 @@ func TestAcceptTapObservesFailWithoutPublishing(t *testing.T) {
 	}
 	if len(publisher.messages) != 0 {
 		t.Fatalf("len(messages) = %d, want 0", len(publisher.messages))
+	}
+}
+
+func TestAcceptTapAcceptsRecognizedDeniedFailThroughPolicy(t *testing.T) {
+	publisher := &stubPublisher{}
+	recorder := &stubObservationRecorder{}
+	projector := presence.NewProjector()
+	service, err := NewService(
+		publisher,
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		WithProjection(projector),
+		WithObservationRecorder(recorder),
+		WithAcceptedPresenceRecorder(recorder),
+		WithPolicyEvaluator(&stubPolicyEvaluator{
+			decision: PolicyDecision{
+				Admitted:           true,
+				AcceptancePath:     AcceptancePathFacility,
+				AcceptedReasonCode: "testing_rollout",
+				PolicyVersionID:    "policy-version-001",
+			},
+		}),
+		WithPolicyAcceptanceEnabled(true),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", TapRequest{
+		EventID:       "edge-fail-policy-001",
+		AccountRaw:    "301536642",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		ZoneID:        "gym-floor",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "fail",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "No active access rule for this account.",
+	})
+	if err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+
+	if result.Status != "accepted" {
+		t.Fatalf("result.Status = %q, want accepted", result.Status)
+	}
+	if result.Result != "fail" {
+		t.Fatalf("result.Result = %q, want fail", result.Result)
+	}
+	if !result.Published {
+		t.Fatal("result.Published = false, want true")
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(publisher.messages))
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(recorder.records))
+	}
+	if recorder.records[0].FailureReasonCode != FailureReasonRecognizedDenied {
+		t.Fatalf("FailureReasonCode = %q, want %q", recorder.records[0].FailureReasonCode, FailureReasonRecognizedDenied)
+	}
+	if len(recorder.commits) != 0 {
+		t.Fatalf("len(commits) = %d, want 0", len(recorder.commits))
+	}
+	if len(recorder.acceptances) != 1 {
+		t.Fatalf("len(acceptances) = %d, want 1", len(recorder.acceptances))
+	}
+	if recorder.acceptances[0].AcceptancePath != AcceptancePathFacility {
+		t.Fatalf("AcceptancePath = %q, want %q", recorder.acceptances[0].AcceptancePath, AcceptancePathFacility)
+	}
+	if recorder.acceptances[0].AcceptedReasonCode != "testing_rollout" {
+		t.Fatalf("AcceptedReasonCode = %q, want testing_rollout", recorder.acceptances[0].AcceptedReasonCode)
+	}
+
+	snapshot, err := projector.CurrentOccupancy(context.Background(), domain.OccupancyFilter{
+		FacilityID: "ashtonbee",
+		ZoneID:     "gym-floor",
+	})
+	if err != nil {
+		t.Fatalf("CurrentOccupancy() error = %v", err)
+	}
+	if snapshot.CurrentCount != 1 {
+		t.Fatalf("snapshot.CurrentCount = %d, want 1", snapshot.CurrentCount)
 	}
 }
 

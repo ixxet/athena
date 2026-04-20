@@ -288,6 +288,31 @@ func TestLoadRejectsMixedEdgeHistoryBackends(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPolicyAcceptanceWithoutPostgres(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing Postgres error")
+	}
+	if !strings.Contains(err.Error(), "ATHENA_EDGE_POSTGRES_DSN") {
+		t.Fatalf("Load() error = %q, want ATHENA_EDGE_POSTGRES_DSN context", err)
+	}
+}
+
+func TestLoadParsesPolicyAcceptanceFlag(t *testing.T) {
+	t.Setenv("ATHENA_EDGE_POSTGRES_DSN", "postgres://athena:secret@127.0.0.1:5432/athena?sslmode=disable")
+	t.Setenv("ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.EdgePolicyAcceptanceEnabled {
+		t.Fatal("EdgePolicyAcceptanceEnabled = false, want true")
+	}
+}
+
 func TestLoadParsesFacilityCatalogPath(t *testing.T) {
 	t.Setenv("ATHENA_FACILITY_CATALOG_PATH", "/tmp/athena-facilities.json")
 

@@ -331,6 +331,139 @@ func TestPostgresStoreTracksUnmatchedExitSessions(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreAcceptsRecognizedDeniedThroughFacilityPolicy(t *testing.T) {
+	store := newPostgresStore(t)
+	projector := presence.NewProjector()
+
+	policyRecord, err := store.CreateFacilityWindowPolicy(context.Background(), CreateFacilityWindowPolicyInput{
+		FacilityID:         "ashtonbee",
+		StartsAt:           time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC),
+		EndsAt:             time.Date(2026, 4, 4, 13, 0, 0, 0, time.UTC),
+		ReasonCode:         "testing_rollout",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateFacilityWindowPolicy() error = %v", err)
+	}
+	if policyRecord.PolicyMode != "facility_window" {
+		t.Fatalf("policy mode = %q, want facility_window", policyRecord.PolicyMode)
+	}
+
+	service, err := edge.NewService(
+		&stubPublisher{},
+		"salt",
+		map[string]string{"entry-node": "entry-token"},
+		edge.WithProjection(projector),
+		edge.WithObservationRecorder(store),
+		edge.WithAcceptedPresenceRecorder(store),
+		edge.WithPolicyEvaluator(store),
+		edge.WithPolicyAcceptanceEnabled(true),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.AcceptTap(context.Background(), "entry-token", edge.TapRequest{
+		EventID:       "edge-policy-fail-001",
+		AccountRaw:    "1000123456",
+		Direction:     "in",
+		FacilityID:    "ashtonbee",
+		ZoneID:        "gym-floor",
+		NodeID:        "entry-node",
+		ObservedAt:    "2026-04-04T12:00:00Z",
+		Result:        "fail",
+		AccountType:   "Standard",
+		Name:          "Fixture Student",
+		StatusMessage: "No active access rule for this account.",
+	})
+	if err != nil {
+		t.Fatalf("AcceptTap() error = %v", err)
+	}
+	if result.Status != "accepted" {
+		t.Fatalf("result.Status = %q, want accepted", result.Status)
+	}
+	if result.Result != "fail" {
+		t.Fatalf("result.Result = %q, want fail", result.Result)
+	}
+
+	records, err := store.ReadAll(context.Background())
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].FailureReasonCode != edge.FailureReasonRecognizedDenied {
+		t.Fatalf("FailureReasonCode = %q, want %q", records[0].FailureReasonCode, edge.FailureReasonRecognizedDenied)
+	}
+	if records[0].AcceptedAt == nil {
+		t.Fatal("AcceptedAt = nil, want policy-backed accepted presence")
+	}
+	if records[0].AcceptancePath != edge.AcceptancePathFacility {
+		t.Fatalf("AcceptancePath = %q, want %q", records[0].AcceptancePath, edge.AcceptancePathFacility)
+	}
+	if records[0].AcceptedReasonCode != "testing_rollout" {
+		t.Fatalf("AcceptedReasonCode = %q, want testing_rollout", records[0].AcceptedReasonCode)
+	}
+
+	publicObservations, err := store.ReadPublicObservations(context.Background(), PublicFilter{
+		FacilityID: "ashtonbee",
+		Since:      time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC),
+		Until:      time.Date(2026, 4, 4, 13, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ReadPublicObservations() error = %v", err)
+	}
+	if len(publicObservations) != 1 {
+		t.Fatalf("len(publicObservations) = %d, want 1", len(publicObservations))
+	}
+	if !publicObservations[0].Accepted {
+		t.Fatal("Accepted = false, want true")
+	}
+	if publicObservations[0].AcceptancePath != edge.AcceptancePathFacility {
+		t.Fatalf("AcceptancePath = %q, want %q", publicObservations[0].AcceptancePath, edge.AcceptancePathFacility)
+	}
+
+	restartedProjector := presence.NewProjector()
+	replay, err := ReplayProjector(restartedProjector, records)
+	if err != nil {
+		t.Fatalf("ReplayProjector() error = %v", err)
+	}
+	if replay.Applied != 1 {
+		t.Fatalf("replay.Applied = %d, want 1", replay.Applied)
+	}
+
+	report, err := store.ReadAnalytics(context.Background(), AnalyticsFilter{
+		FacilityID:   "ashtonbee",
+		ZoneID:       "gym-floor",
+		NodeID:       "entry-node",
+		Since:        time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC),
+		Until:        time.Date(2026, 4, 4, 13, 0, 0, 0, time.UTC),
+		BucketSize:   15 * time.Minute,
+		SessionLimit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ReadAnalytics() error = %v", err)
+	}
+	if report.ObservationSummary.Accepted != 1 {
+		t.Fatalf("ObservationSummary.Accepted = %d, want 1", report.ObservationSummary.Accepted)
+	}
+	if report.ObservationSummary.AcceptedTestingPolicy != 1 {
+		t.Fatalf("ObservationSummary.AcceptedTestingPolicy = %d, want 1", report.ObservationSummary.AcceptedTestingPolicy)
+	}
+	if report.ObservationSummary.RecognizedDenied != 1 {
+		t.Fatalf("ObservationSummary.RecognizedDenied = %d, want 1", report.ObservationSummary.RecognizedDenied)
+	}
+	if report.SessionSummary.OccupancyAtEnd != 1 {
+		t.Fatalf("SessionSummary.OccupancyAtEnd = %d, want 1", report.SessionSummary.OccupancyAtEnd)
+	}
+	if report.SessionSummary.ClosedCount != 0 {
+		t.Fatalf("SessionSummary.ClosedCount = %d, want 0", report.SessionSummary.ClosedCount)
+	}
+}
+
 func TestPostgresStoreRejectsUnauthorizedAndMalformedWrites(t *testing.T) {
 	store := newPostgresStore(t)
 
