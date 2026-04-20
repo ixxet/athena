@@ -8,8 +8,9 @@ are earned.
 
 ## Current Line
 
-Current active working line: `Phase 3 shared substrate A / v0.7.x` on `main`,
-later than the `v0.6.1` Milestone 2.0 hardening follow-up.
+Current active working line: `v0.8.0` on `main`, later than the closed
+`v0.7.x` storage/analytics line and the earlier `v0.6.1` Milestone 2.0
+hardening follow-up.
 
 `v0.5.0` remains the Tracer 16 durable-history release line. `v0.5.1` is the
 bounded Tracer 17 support follow-up on that same durable-history branch.
@@ -28,15 +29,19 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 - Postgres-backed append-only edge observations are now real in repo/runtime
 - derived `open`, `closed`, and `unmatched_exit` session facts are now real in
   repo/runtime
+- failure-reason normalization, facility-local identity subjects/links,
+  explicit policy versions, and accepted-presence records are now real in
+  repo/runtime
 - one bounded internal HTTP analytics read plus one CLI analytics read are now
   real in repo/runtime for facility, zone, node, and time-window questions
+- owner CLI policy and identity commands are now real in repo/runtime
 - bounded live in-cluster arrival proof is real through Milestone 1.5
 - bounded live browser-reachable ATHENA edge ingress and occupancy proof is now
-  real for `v0.4.1`
+  real for the deployed `v0.7.0` line
 - the older local file-backed durable history path remains available only as an
   explicit fallback when Postgres is not configured
-- bounded live proof still does not include the Postgres-backed durable branch,
-  and broad ingress rollout is still unproven
+- bounded deployed truth does not yet include the new `v0.8.0`
+  policy-backed-acceptance line, and broad ingress rollout is still unproven
 
 ## Current And Planned Release Lines
 
@@ -46,7 +51,8 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads over validated internal catalog files | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown and publish resilience | keep the line patch-only and non-widening | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | `v0.7.0` | Postgres-backed append-only observations, derived session facts, and bounded internal analytics reads | keep the new surfaces internal/CLI-first, keep fail-open durable writes explicit, and preserve ATHENA as the physical-truth ingest boundary | do not widen into booking, public dashboards, AI summaries, alias auto-merge, or prediction |
-| later than `v0.7.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, derived sessions, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.8.0` | policy-backed accepted-presence testing line | keep source `fail` truth immutable, require explicit policy versions, keep policy/identity management internal CLI-only, and keep the existing tap contract unchanged | do not widen into session cutover, operator UI, public reports, alias UX, or prediction |
+| later than `v0.8.0` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | build on stable ingress, trusted durable history, explicit accepted presence, and clean facility truth first | do not ship dashboards, public reports, or predictive UX before the accepted-presence truth model is stable |
 
 ## Next Ladder Role
 
@@ -56,7 +62,8 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | `Tracer 18` / `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth without activating writes, prediction, or shared contract widening |
 | Milestone 2.0 hardening follow-up / `v0.6.1` | graceful shutdown plus bounded publish resilience on the existing runtime | keeps the current physical-truth line honest before any later diagnostics or prediction widening |
 | Phase 3 shared substrate A / `v0.7.0` | Postgres-backed observations, derived sessions, and bounded internal analytics reads | gives manager-grade occupancy and flow work a real substrate before dashboards, scheduling, or AI summary copy |
-| later than `v0.7.0` | broader diagnostics and capacity prediction runtime | keeps prediction later than trusted ingress, durable history, derived sessions, and facility truth |
+| current `v0.8.0` line | policy-backed accepted presence for explicit recognized-denied testing windows | lets ATHENA represent local testing admission honestly without rewriting TouchNet source truth or widening into a broader operator product surface |
+| later than `v0.8.0` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | keeps duration/reporting/prediction later than trusted ingress, durable history, accepted presence, and facility truth |
 
 ## Verified Audit Carry-Forward
 
@@ -82,12 +89,17 @@ ATHENA hardening work.
   history path remains only as a fallback
 - compact durable identity markers now guard projector misses after absent-state
   eviction, but they do not replace replay as the occupancy authority
+- source `fail` truth must stay immutable even when a policy-backed acceptance
+  exists for the same observation
+- accepted presence can widen occupancy and replay truth now, but session
+  derivation stays source-pass-only in `v0.8.0`
+- policy and identity management stay internal CLI-only in this line; there is
+  still no HTTP admin surface
 - the bounded live deployment uses one facility, one node token, a private GHCR
   pull secret, and a narrow HTTPS proxy path; it is not yet a broad ATHENA
   ingress rollout
-- observed TouchNet pass/fail history is a plausible next ATHENA persistence
-  slice, but operator override workflows should remain separate from the
-  physical-truth ingest boundary
+- operator override or alias-management workflows should remain separate from
+  the physical-truth ingest boundary
 - the new bounded history read must stay privacy-safe, facility-filtered, and
   read-only; it exists to support HERMES rather than to turn ATHENA into a
   broad operator product surface
@@ -117,5 +129,8 @@ ATHENA hardening work.
 - `Tracer 18`: facility metadata and hours after durable history is stable
 - `Phase 3 shared substrate A`: Postgres-backed observations, derived sessions,
   and bounded internal analytics after the Phase 2 plateau stayed clean
-- later line: broader diagnostics and prediction after source-backed ingress,
-  durable sessions, and facility truth are stable
+- current line: `v0.8.0` policy-backed accepted presence after the storage line
+  stayed clean
+- later line: accepted-presence session cutover, broader diagnostics, and
+  prediction after source-backed ingress, durable sessions, accepted presence,
+  and facility truth are stable

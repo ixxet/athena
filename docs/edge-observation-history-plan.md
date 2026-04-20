@@ -2,312 +2,214 @@
 
 ## Purpose
 
-This document records the next ATHENA planning slice after bounded live
-edge-driven occupancy deployment:
+This document now records the layered ATHENA storage model after the closed
+`v0.7.x` storage/analytics line and the current `v0.8.0`
+policy-backed-admission testing line.
 
-`How should ATHENA store observed edge history durably enough to support audit, flow analysis, frequency analysis, and inferred stay duration without widening product logic prematurely?`
+The planning question is no longer just:
 
-The short answer is:
+`How do we store edge taps durably?`
 
-- keep ATHENA as the physical-truth ingest boundary
-- persist raw edge observations append-only
-- derive analytics and inferred sessions from those observations
-- keep manual overrides and broader operator workflows out of the same slice
+It is now:
 
-Phase 3 shared substrate A update:
-
-- append-only Postgres-backed observation persistence is now real in
-  repo/runtime
-- derived `open`, `closed`, and `unmatched_exit` session facts are now real in
-  repo/runtime
-- compact durable identity markers are now real in repo/runtime for projector
-  miss protection after absent-state eviction
-- privacy-safe CLI/internal history reads plus one bounded internal analytics
-  read are now real in repo/runtime
-- replay of committed `pass` observations into a fresh projector is now real in
-  repo/runtime from the configured durable store
-- deployed truth still does **not** prove that the Postgres-backed durable
-  branch live
-
-The standalone Mermaid source for this planning flow lives at
-[`docs/diagrams/edge-observation-history.mmd`](docs/diagrams/edge-observation-history.mmd).
+`How does ATHENA preserve immutable source observation truth while also representing explicit identity linkage, explicit admission policy, explicit accepted presence, and later derived session truth?`
 
 ## Current Truth
 
-What ATHENA already does:
+ATHENA already does all of the following in repo/runtime:
 
 - accepts live TouchNet-shaped edge taps through `POST /api/v1/edge/tap`
 - authenticates per-node tokens
-- preserves `pass` and `fail` observations in an append-only Postgres-backed
-  history path when configured
-- updates in-memory live occupancy from accepted `pass` events in explicit
-  projection mode
-- publishes safe identified arrival/departure events downstream
-- derives `open`, `closed`, and `unmatched_exit` session facts from accepted
-  `pass` events
-- writes a compact durable last-seen marker for each committed `pass` identity
-  key and consults it on projector misses before accepting a supposedly fresh
-  event
-- exposes one bounded internal analytics read over facility, zone, node, and
-  time window
-- replays committed `pass` observations from the configured durable store into
-  a fresh projector when durable history is configured
-- keeps downstream payloads on the hashed identity, not the raw account value
-- keeps the older file-backed history path only as an explicit local/runtime
-  fallback when Postgres is not configured
+- stores append-only `pass` and `fail` observations in Postgres when
+  `ATHENA_EDGE_POSTGRES_DSN` is set
+- normalizes fail observations to `bad_account_number`,
+  `recognized_denied`, or `unclassified_fail`
+- keeps source observation truth immutable even when a policy-backed admission
+  decision exists later for the same tap
+- maintains facility-local identity subjects and privacy-safe identity links
+- maintains explicit access policy versions with actor attribution
+- maintains explicit accepted-presence records separate from source observation
+  rows
+- replays occupancy from accepted-presence truth on restart
+- keeps current `edge_sessions` as a separate derived layer over accepted
+  source-pass observations only
+- keeps the older file-backed history path only as an explicit fallback when
+  Postgres is not configured
 
-What ATHENA does **not** do yet:
+Bounded deployed truth remains behind the repo/runtime line:
 
-- prove the Postgres-backed durable-history line in deployed truth
-- store occupancy snapshots durably
-- expose query/search APIs over observed edge history
-- reconcile student-number aliases and RFID aliases into a canonical person
-- redesign the source/site ordering contract for ingest conflict resolution
-- widen into booking, public dashboards, or AI summary surfaces
+- the bounded live deployment still proves the `v0.7.0` storage/analytics line
+- the new `v0.8.0` policy-backed-acceptance line is repo/runtime truth until a
+  separate deployment packet proves it live
 
-That means the next storage slice is not about inventing new runtime truth. It
-is about preserving the truth ATHENA already sees.
+## Layered Truth Model
 
-The current marker line is intentionally narrow:
+### 1. Immutable source observation truth
 
-- markers are a compact guardrail for projector misses, not a second occupancy
-  authority
-- replay from committed `pass` observations remains authoritative
-- source/site ordering contract redesign is explicitly deferred to a later
-  ingest redesign instead of being smuggled into this patch
+`athena.edge_observations` is the append-only record of what TouchNet showed.
 
-## Questions The Next Slice Should Answer
+Key properties:
 
-Durable edge history should make the following questions answerable:
-
-- How many taps happened by facility, zone, workstation, hour, and day?
-- How often do `pass` and `fail` attempts occur?
-- Which failure reasons happen most often?
-- Which readers generate the most malformed scans or mismatched account-type
-  attempts?
-- How many unique people visited a facility over a period?
-- How long did a person likely stay, based on accepted `in` and `out` taps?
-- How often do repeated `in`, repeated `out`, and `already_absent` /
-  `already_present` cases happen?
-- How often does the same person appear under different account types or raw
-  account values?
-
-These are ATHENA-appropriate operational and physical-truth questions. They are
-not yet override workflow, staffing workflow, or member-intent questions.
-
-## Recommended Storage Model
-
-### 1. Append-only edge observations
-
-The first durable slice should be one immutable table for every observed edge
-attempt, including both `pass` and `fail`.
-
-Current runtime fields:
-
-- `observation_id`
-- `event_id`
-- `facility_id`
-- `zone_id`
-- `node_id`
-- `direction`
-- `result`
-- `source`
-- `observed_at`
-- `stored_at`
-- `account_type`
-- `name_present`
-- `external_identity_hash`
-- `created_at`
-
-Recommended rules:
-
-- `event_id` stays the idempotency key
-- the row is never updated after write
-- both `pass` and `fail` are stored
-- the hashed identity is always stored
+- one row per observed tap
+- source `result` remains `pass` or `fail`
+- `failure_reason_code` is normalized
 - raw account values, resolved names, and free-text `status_message` stay out
-  of the durable row and out of downstream publish payloads
-- commit truth stays separate in an append-only `edge_observation_commits`
-  table so accepted `pass` events remain explicit
+  of durable storage
+- old rows are not rewritten to fit later operator interpretation
 
-### 2. Derived session facts, not handwritten occupancy history
+This is the physical-source fact layer.
 
-The next thing to derive is not a mutable occupancy ledger. It is an inferred
-session layer built from accepted `pass` events.
+### 2. Explicit identity-linkage truth
 
-Current runtime shape:
+`athena.edge_identity_subjects` and `athena.edge_identity_links` represent
+facility-local subject identity without auto-merging by name.
 
-- `session_id`
-- `external_identity_hash`
-- `facility_id`
-- `zone_id`
-- `entry_node_id`
-- `entry_event_id`
-- `entry_at`
-- `exit_node_id`
-- `exit_event_id`
-- `exit_at`
-- `duration_seconds`
-- `session_state` as `open`, `closed`, or `unmatched_exit`
-- `created_at`
-- `updated_at`
+Key properties:
 
-Rules:
+- one subject is scoped to one facility
+- the first automatic link is `external_identity_hash`
+- later links such as `member_account` or `qr_identity` are explicit,
+  privacy-safe additions
+- no name-based auto-merge exists in this model
 
-- derive sessions from accepted `pass` events only
-- never rewrite the original observation history
-- treat unmatched `out` and unmatched `in` as explicit analytic states, not as
-  silent data loss
+This is the linkage layer, not the observation layer.
 
-### 3. Alias mapping must be explicit
+### 3. Explicit policy truth
 
-TouchNet can surface the same person under:
+`athena.edge_access_policies` and `athena.edge_access_policy_versions` record
+who authorized admission logic and when.
 
-- `Standard` student number
-- `ISO` / card-derived number
-- resolved name
+Current `v0.8.0` policy modes:
 
-ATHENA should not auto-merge identities based only on name. The storage plan
-should leave room for an explicit alias layer later.
+- subject `always_admit`
+- subject `grace_until`
+- facility `facility_window` with
+  `target_selector='recognized_denied_only'`
 
-Recommended future table:
+Current `v0.8.0` reason codes:
 
-- `alias_id`
-- `canonical_person_id`
-- `external_identity_hash`
-- `account_type`
-- `source`
-- `confidence`
-- `confirmed_by`
-- `confirmed_at`
-- `notes`
+- `testing_rollout`
+- `alumni_exception`
+- `semester_rollover`
+- `owner_exception`
 
-This lets ATHENA or a later admin surface record:
+Current `v0.8.0` actor attribution:
 
-- trusted source-system mappings
-- operator-confirmed aliases
-- candidate links that still need confirmation
+- actor kinds: `owner_user`, `service_account`, `system`
+- surfaces: `athena_cli`, `migration_seed`, `future_admin_http`
 
-## Metrics And Analytics To Derive
+This is the explicit policy layer.
 
-Once append-only storage exists, ATHENA should be able to produce:
+### 4. Explicit accepted-presence truth
 
-### Flow metrics
+`athena.edge_presence_acceptances` records when ATHENA treated an observation as
+accepted physical presence.
 
-- taps per 15-minute bin by facility
-- taps per 15-minute bin by zone
-- taps per workstation / node
-- `pass` versus `fail` counts over time
-- entry versus exit ratios by window
+Current acceptance paths:
 
-### Quality metrics
+- `touchnet_pass`
+- `always_admit`
+- `grace_until`
+- `facility_window`
 
-- malformed account attempts
-- `bad account number` frequency
-- `no rule matches account` frequency
-- repeated `already_present` and `already_absent` outcomes
-- account-type mismatch frequency such as `Standard` input used against an RFID
-  number or vice versa
+Important rule:
 
-### Visit metrics
+- accepted presence is not a rewrite of source observation truth
 
-- unique visitors per day
-- repeat visitors per week
-- inferred average stay duration
-- median stay duration
-- open sessions at cutoff time
-- unmatched exits and unmatched entries
+That means a recognized denied tap can remain:
 
-### Identity-reconciliation metrics
+- source result: `fail`
 
-- same resolved name appearing under multiple `external_identity_hash` values
-- same reader producing both `Standard` and `ISO` for likely related identities
-- candidate alias counts by facility
+while also becoming:
 
-## Recommended Implementation Order
+- accepted presence: `true`
+- acceptance path: `facility_window`
+- accepted reason code: `testing_rollout`
 
-Keep this narrow and honest:
+This is the accepted-presence layer.
 
-1. Keep append-only observation persistence explicit, bounded, and privacy-safe.
-2. Keep accepted-pass commit truth explicit instead of inferring it from all
-   `pass` rows.
-3. Add richer repo-internal CLI/read models over durable history first, not
-   broad public HTTP report surfaces or operator UI.
-4. Add derived session materialization for duration and visit analytics.
-5. Add alias candidates and explicit alias confirmation later.
+### 5. Derived session truth
 
-Do **not** start with:
+`athena.edge_sessions` still exists as a derived session layer.
 
-- override workflows
-- occupancy snapshot persistence
-- broad dashboard UI
-- automatic identity merging by name
+Current `v0.8.0` rule:
 
-## First Rollout Posture
+- session derivation remains source-pass-only
 
-The first durable rollout should preserve tomorrow's live tap collection path.
+That is deliberate. `v0.8.0` moves occupancy and replay onto accepted-presence
+truth, but it does not yet claim stay-duration truth for policy-backed accepted
+fails.
 
-Start with:
+This is the staged-derived layer.
 
-- the same tunnel, token, and userscript contract
-- persistence added behind the existing `POST /api/v1/edge/tap` handler
-- fail-open shadow-write posture for the first rollout
+## Current Testing-Policy Boundary
 
-That means:
+The first-class testing policy in `v0.8.0` is facility-wide and explicit:
 
-- if the durable write fails, ATHENA should still accept the tap
-- the current live occupancy and identified publish path should keep working
-- degraded persistence must become explicit through logs and metrics
+- `ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED=true`
+- an active facility policy window exists
+- target selector is `recognized_denied_only`
 
-Revisit fail-closed behavior only after the durable path is trusted.
+Recognition rules in this line:
 
-## Data Handling Rules
+- `recognized_denied` means source `result='fail'` and `name_present=true`
+- `bad_account_number` never becomes accepted presence in this line
+- fully up-to-date members with source `pass` are unaffected by the testing
+  policy
 
-- Published downstream events remain hash-only.
-- Raw account values stay inside ATHENA-owned restricted storage.
-- Name and status fields are operationally useful, but still sensitive.
-- Observation storage should support retention and purge rules from the start.
-- Session analytics should be reproducible from append-only truth, not from
-  mutable ad hoc edits.
+This gives ATHENA a truthful way to say:
 
-## What Tonight's Live Proof Added
+- TouchNet denied this tap
+- the facility testing policy still treated it as accepted presence
 
-The bounded live workstation proof surfaced several real requirements for the
-durable storage slice:
+without lying that TouchNet passed it.
 
-- workstation-neutral node IDs are still useful even when direction is inferred
-  from the TouchNet row
-- `pass`, `fail`, malformed input, and mismatched account-type attempts all
-  happen in normal operator testing and should be stored losslessly
-- repeated `in` / `out` attempts and `already_absent` / `already_present`
-  outcomes are analytically meaningful, not just noise
-- legacy browser environments may need compatibility-targeted bridge variants,
-  which means node-level attribution matters when debugging ingestion quality
+## Current Internal Interfaces
 
-## Future Ownership Split
+The first policy and identity surface is intentionally internal and CLI-only:
 
-ATHENA should own:
+- `athena policy create-facility-window`
+- `athena policy create-subject`
+- `athena policy disable`
+- `athena policy list`
+- `athena identity subject show`
+- `athena identity link add`
 
-- append-only edge observation history
-- hashed identity handling
-- derived session analytics
-- source-quality and reader-quality metrics
+There is still no HTTP admin surface in this line.
 
-Later services such as HERMES should own:
+The bounded read surfaces now expose separated truth:
 
-- operator search UI
-- manual admit / override workflows
-- staff-facing reconciliation UX
-- exception approval and review
+- source result remains visible
+- accepted status is separate
+- acceptance path is explicit
+- accepted reason code is explicit
 
-## Definition Of The Next Storage Slice
+## What This Solves
 
-The next ATHENA storage slice is done when:
+This layered model solves the main truth problems that showed up during live
+TouchNet rollout:
 
-- live edge observations are durable and append-only
-- pass/fail history is queryable internally
-- a first inferred session layer can compute entry/exit duration safely
-- identity aliasing remains explicit and does not silently widen downstream
-  publish contracts
-- docs still state honestly that overrides and broader staff workflows remain
-  out of scope
+- source deny cannot be silently rewritten into source pass
+- recognized denied taps can still participate in explicit testing-mode
+  accepted presence
+- gibberish input stays out of the admitted path
+- occupancy and restart replay can follow accepted-presence truth instead of
+  only source-pass truth
+- identity linkage can grow without auto-merging by name
+- later ATHENA or HERMES tooling can reason about policy-backed acceptance
+  without flattening multiple truths into one
+
+## What Is Still Deferred
+
+The following are still deferred on purpose:
+
+- accepted-presence session cutover
+- policy-backed stay-duration truth
+- HTTP admin surfaces for policy or identity management
+- public report/export surfaces
+- alias-management UX
+- name-based auto-merge
+- prediction and public dashboards
+
+Those later lines should build on the current layered truth model instead of
+collapsing it.

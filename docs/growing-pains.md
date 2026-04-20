@@ -250,3 +250,46 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   Rule: when a dormant storage sketch no longer matches settled runtime truth,
   supersede it explicitly instead of quietly stretching it until the semantics
   become ambiguous.
+
+## 2026-04-20
+
+- Symptom: live testing pressure made it tempting to treat a recognized denied
+  TouchNet tap as if TouchNet had actually passed it.
+  Cause: the physical facility wanted to keep harvesting truthful visit data
+  during a testing window, but the first mental model blurred source truth and
+  local admission intent into one field.
+  Fix: keep `edge_observations.result` immutable, normalize the failure reason,
+  and add a separate accepted-presence layer backed by explicit policy versions.
+  Rule: source observation truth and facility admission truth must stay
+  separate, even when both facts apply to the same tap.
+
+- Symptom: a populated TouchNet name looked useful enough that it was easy to
+  drift toward treating `name_present` as identity truth.
+  Cause: real rollout pressure exposed the difference between “recognized by the
+  source” and “canonically linked in ATHENA,” but the original durable-history
+  plan did not yet model that distinction explicitly.
+  Fix: add facility-local identity subjects plus privacy-safe identity links,
+  and keep name-based auto-merge out of the runtime line.
+  Rule: `name_present` can help classify a failure as `recognized_denied`, but
+  it is not canonical identity truth.
+
+- Symptom: the first testing-mode admission idea almost became a silent
+  heuristic: “if a fail has a name, just treat it as admitted.”
+  Cause: rollout/demo pressure favored convenience, but a hidden heuristic would
+  have muddied auditability and made later policy reasoning impossible.
+  Fix: require both an explicit runtime flag
+  (`ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED=true`) and an explicit active policy
+  window or subject policy before a recognized denied tap becomes accepted
+  presence.
+  Rule: testing/demo pressure earns explicit policy, not implicit runtime
+  guesses.
+
+- Symptom: it was tempting to cut accepted presence and session-duration truth
+  over in the same packet.
+  Cause: once accepted presence became explicit, it looked attractive to let
+  every later analytic layer switch at once.
+  Fix: move occupancy and replay onto accepted-presence truth in `v0.8.0`, but
+  keep `edge_sessions` source-pass-only until a later dedicated session-cutover
+  line.
+  Rule: accepted presence and stay-duration/session truth should be staged
+  separately when the semantics are still settling.

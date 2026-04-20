@@ -9,10 +9,12 @@ publication path that other repos depend on.
 > visit lifecycle publication, explicit in-memory edge-driven occupancy
 > projection for `serve`, Postgres-backed append-only edge observations with
 > derived session facts, compact durable identity markers for projector misses,
-> and bounded internal analytics reads, bounded
-> retry/backoff publication with bounded process-local dedupe, bounded live
-> browser-reachable deployment of the narrower `v0.4.1` edge path, and shared
-> `ashton-proto` runtime contracts for arrival and departure events.
+> accepted-presence truth backed by facility-local identity subjects, policy
+> versions, and acceptance records in the current `v0.8.0` repo/runtime line,
+> bounded internal analytics reads, bounded retry/backoff publication with
+> bounded process-local dedupe, bounded live browser-reachable deployment of
+> the narrower `v0.7.0` storage/analytics line, and shared `ashton-proto`
+> runtime contracts for arrival and departure events.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,
@@ -73,8 +75,8 @@ flowchart LR
 | --- | --- | --- | --- |
 | HTTP health | `GET /api/v1/health` | Real | Returns service status and adapter name |
 | HTTP occupancy count | `GET /api/v1/presence/count` | Real | Reads through the canonical occupancy path; in `ATHENA_EDGE_OCCUPANCY_PROJECTION=true` serve mode this is the in-memory edge projection |
-| HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, writes privacy-safe append-only observations when `ATHENA_EDGE_POSTGRES_DSN` is set, and preserves the current accept/publish/projection contract |
-| HTTP history read | `GET /api/v1/presence/history` | Real, bounded internal support | Reads privacy-safe facility-filtered history from the configured durable store and returns only `direction`, `result`, `observed_at`, and `committed` |
+| HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, writes privacy-safe append-only observations when `ATHENA_EDGE_POSTGRES_DSN` is set, normalizes fail reasons, and can add separate policy-backed accepted presence without rewriting source `fail` truth |
+| HTTP history read | `GET /api/v1/presence/history` | Real, bounded internal support | Reads privacy-safe facility-filtered history from the configured durable store and returns `direction`, source `result`, `observed_at`, `committed`, and separate accepted-presence fields |
 | HTTP analytics read | `GET /api/v1/presence/analytics` | Real, bounded internal support | Reads Postgres-backed observation and session analytics by facility, zone, node, and time window; stays internal and bounded instead of widening into dashboards |
 | HTTP facility catalog | `GET /api/v1/facilities` | Real, internal-only, config-gated | Reads facility summaries from `ATHENA_FACILITY_CATALOG_PATH`; returns `facility_id`, `name`, and `timezone` only |
 | HTTP facility detail | `GET /api/v1/facilities/{facility_id}` | Real, internal-only, config-gated | Reads one facility's hours, zones, closure windows, and bounded metadata from the same validated catalog file |
@@ -86,6 +88,8 @@ flowchart LR
 | Raw TouchNet replay | `athena edge replay-touchnet` | Real | Replays raw TouchNet report exports through the same edge ingress path used by the live browser bridge |
 | Internal durable history read | `athena edge history --postgres-dsn ...` | Real, internal-only | Reads recent append-only durable observations through a CLI-only surface over hashed identities |
 | Internal analytics read | `athena edge analytics --postgres-dsn ...` | Real, internal-only | Reads bounded Postgres-backed observation, flow, occupancy, and derived-session analytics over a requested window |
+| Policy admin CLI | `athena policy create-facility-window|create-subject|disable|list` | Real, internal-only | Creates, disables, and inspects accepted-presence policies through a Postgres-backed owner CLI; there is still no HTTP admin surface |
+| Identity admin CLI | `athena identity subject show` / `athena identity link add` | Real, internal-only | Inspects facility-local subjects and attaches privacy-safe links without exposing raw IDs or enabling name-based auto-merge |
 | One-shot arrival publish | `athena presence publish-identified` | Real | Publishes the current identified-arrival batch through NATS |
 | One-shot departure publish | `athena presence publish-identified-departures` | Real | Publishes the current identified-departure batch through NATS |
 | Background publish worker | `athena serve` with `ATHENA_NATS_URL` and adapter-backed mode | Real | Dedupes inside a bounded process-local window and retries transient publish failures with bounded backoff on the configured interval |
@@ -106,9 +110,10 @@ flowchart LR
 | Adapter model | Mock adapter | Instituted | `v0.1.x` -> `v0.4.x` | Deterministic fixtures remain available for tests and bounded smoke |
 | Real ingress adapter | CSV presence-event adapter plus push-based edge ingress | Real | `v0.4.x` | CSV remains replay/import truth; edge ingress is the live source when explicit projection mode is enabled |
 | Live occupancy projection | In-memory identity and aggregate projection with bounded absent-state retention and cap handling | Real, explicit | `v0.4.x` | `pass` edge events can now drive live occupancy in bounded live deployment without widening persistence |
-| Durable edge history | Append-only Postgres observation tables plus commit markers | Real, explicit, repo/runtime | later than `v0.6.1` | Stores privacy-safe `pass` and `fail` observations append-only without leaking raw account values, names, or free-text status messages |
+| Durable edge history | Append-only Postgres observation tables plus commit markers | Real, explicit, repo/runtime | `v0.7.0` | Stores privacy-safe `pass` and `fail` observations append-only without leaking raw account values, names, or free-text status messages |
 | Durable projector miss guardrail | Compact Postgres or file-backed identity markers keyed by facility, zone, and hashed identity | Real, explicit, repo/runtime | `v0.7.2` | Rejects older or duplicate pass events after absent-state eviction without turning markers into a second occupancy authority |
 | Derived session analytics | Postgres-backed `edge_sessions` read model plus bounded internal HTTP/CLI reads | Real, internal-only | later than `v0.6.1` | Derives `open`, `closed`, and `unmatched_exit` session facts from accepted `pass` observations without rewriting the original observation history |
+| Policy-backed accepted presence | Postgres identity subjects/links, policy versions, acceptance records, and owner CLI | Real, explicit, repo/runtime, internal-only | `v0.8.0` | Keeps source `fail` truth immutable while allowing explicit accepted-presence truth for recognized-denied testing windows |
 | Legacy file-backed history | Append-only file journal plus replay helper | Still available, explicit fallback | `v0.5.0` | Keeps the older local/runtime durable-history path available when Postgres is not configured, but it is no longer the primary storage line for this repo/runtime slice |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
@@ -144,11 +149,13 @@ republish the same mock arrivals on every polling interval, and transient
 publish failures now retry with bounded backoff instead of spinning
 indefinitely. In explicit edge-projection mode, the live tap path publishes
 directly from normalized pass events after the projection accepts them. When
-`ATHENA_EDGE_POSTGRES_DSN` is set in projection mode, ATHENA replays committed
-`pass` observations from Postgres into a fresh projector before it starts
-serving HTTP. The older `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` fallback still
-supports the same replay posture for local/runtime compatibility when Postgres
-is not configured. Cross-restart publish dedupe is still intentionally left to
+`ATHENA_EDGE_POSTGRES_DSN` is set in projection mode, ATHENA replays durable
+accepted-presence truth from Postgres into a fresh projector before it starts
+serving HTTP. In the current repo/runtime line that includes committed `pass`
+observations plus explicit policy-backed accepted fails. The older
+`ATHENA_EDGE_OBSERVATION_HISTORY_PATH` fallback still supports the earlier
+committed-pass replay posture for local/runtime compatibility when Postgres is
+not configured. Cross-restart publish dedupe is still intentionally left to
 downstream idempotency.
 
 ## Edge Observation Note
@@ -163,22 +170,32 @@ slice. ATHENA can observe:
 - `result` as `pass` or `fail`
 - inferred `direction` as `in` or `out`
 
-Current runtime behavior is intentionally split:
+Current runtime behavior is intentionally layered:
 
-- `pass` observations can become identified arrival or departure events
-- `pass` observations can also update the in-memory live occupancy projection
-  when `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
-- `fail` observations are logged for operator diagnostics and reconciliation but
-  are not yet published as visit-lifecycle events
-- authorized observations can be written append-only when
+- every authorized tap still writes one immutable observation row when
   `ATHENA_EDGE_POSTGRES_DSN` is set, with the older
   `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` path retained only as a legacy local
   fallback
-- the durable record stores the hashed identity plus bounded operational fields,
-  but does not store raw account values, resolved names, or free-text
-  `status_message`
-- accepted `pass` observations now derive session facts with explicit
-  `open`, `closed`, and `unmatched_exit` states
+- `pass` observations become accepted presence through the normal
+  `touchnet_pass` path, can update live occupancy, publish downstream, and
+  remain eligible for the current `edge_sessions` derivation
+- `fail` observations are normalized to `bad_account_number`,
+  `recognized_denied`, or `unclassified_fail`
+- `recognized_denied` means the source result is still `fail`, but TouchNet
+  resolved a name, so ATHENA knows the failure is tied to a recognized source
+  account rather than gibberish
+- if `ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED=true` and an active facility or
+  subject policy exists, ATHENA can create separate accepted-presence truth for
+  a `recognized_denied` observation without rewriting the source `fail`
+- `bad_account_number` stays observation-only in this line and never becomes
+  policy-backed accepted presence
+- the durable observation record still stores only hashed identity plus bounded
+  operational fields; the new policy and identity tables also keep raw account
+  values, resolved names, and free-text `status_message` out of durable
+  storage
+- policy-backed accepted presence now affects live occupancy, replay rebuild,
+  and downstream publish, but current `edge_sessions` still derive from
+  source-pass accepted observations only
 - the canonical published identifier remains the hashed account value, not the
   raw student or RFID number
 
@@ -191,15 +208,21 @@ history.
 The current durable groundwork is intentionally narrow:
 
 - the read surface is still CLI/internal-only through `athena edge history`,
-  `athena edge analytics`, one bounded internal HTTP facility-history read,
-  and one bounded internal HTTP analytics read
-- restart/reload rebuilds occupancy from committed `pass` observations only
+  `athena edge analytics`, `athena policy ...`, `athena identity ...`, one
+  bounded internal HTTP facility-history read, and one bounded internal HTTP
+  analytics read
+- restart/reload now rebuilds occupancy from accepted-presence truth, which
+  includes committed `pass` observations and explicit policy-backed accepted
+  fails
 - projector misses now consult compact durable last-seen markers before
   accepting a supposedly fresh event
-- manager-grade flow and occupancy reads come from the Postgres-backed durable
-  store and derived session facts, not from ad hoc memory or log scraping
+- manager-grade flow and occupancy reads now distinguish source result from
+  accepted presence, rather than flattening them into one implied truth
 - browser and replay event-id derivation may still drift; ATHENA preserves the
   supplied `event_id` and does not claim cross-source event-id reconciliation
+- there is still no HTTP admin surface for policy or identity management
+- accepted-presence session cutover is deliberately deferred; this line does
+  not claim stay-duration truth for policy-backed admissions yet
 - source/site ordering contract redesign is still deferred to a later ingest
   redesign line; this patch closes the projector-miss gap without changing the
   ingest contract
@@ -218,6 +241,7 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 | Container CLI mode | The Docker image now defaults to `athena serve`, so CLI-only container use must override the command explicitly | Default runtime behavior now matches HTTP-service deployments instead of printing help and exiting |
 | Edge ingress logs | Routine edge logs redact raw account values and resolved names, and the Postgres durable store keeps the same privacy boundary | Safer diagnostics and derived-session groundwork exist now, but there is still no public or operator search surface |
 | Persistence | Postgres-backed append-only observation storage and derived session facts are now the primary repo/runtime truth when `ATHENA_EDGE_POSTGRES_DSN` is set; the older file path remains a fallback only | Readers should not confuse repo/runtime truth with deployed truth, and they should not assume occupancy snapshots or public dashboards exist |
+| Accepted-presence layering | Policy-backed accepted presence can widen occupancy and publish without changing the source `fail` result | This is intentional for testing-mode admission, but readers must not confuse accepted presence with rewritten TouchNet source truth or with session-duration truth |
 | Publish dedupe | Republish protection is bounded and process-local, and worker retries are bounded per cycle | Restart safety still depends on downstream idempotency; durable history is not a publish ledger |
 | Replay posture | Restart still rebuilds occupancy by replaying committed observations instead of loading a durable occupancy snapshot | Deterministic and honest today, and replay remains authoritative for occupancy truth; compact durable markers only guard projector misses and do not replace replay |
 | Projector misses | After absent-state eviction, projector misses now consult compact durable markers before accepting an older or duplicate event | This closes the old evicted-`in` slip path without widening ATHENA into source-ordering redesign or a second occupancy authority |
@@ -236,10 +260,18 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - a Postgres-backed append-only durable observation store can now write both
   `pass` and `fail` observations behind the same ingress path without changing
   the live response contract
+- fail observations now carry normalized `failure_reason_code` truth instead of
+  relying on free-text status storage
+- recognized-denied testing policies can now create separate accepted presence
+  from source `fail` observations without rewriting the source result
+- facility-local identity subjects, privacy-safe links, policy versions, and
+  accepted-presence records are now real in the Postgres line
 - accepted `pass` observations now derive Postgres-backed session facts with
   explicit `open`, `closed`, and `unmatched_exit` states
+- accepted presence now drives occupancy replay truth, so policy-backed testing
+  admissions survive restart
 - projection-mode restart can now rebuild occupancy deterministically from
-  committed `pass` observations in the durable store before serving HTTP
+  durable accepted-presence truth before serving HTTP
 - raw TouchNet access reports can replay through the same edge ingress route used by the live browser bridge
 - unknown facilities resolve to a safe zero count instead of panicking or going
   negative
@@ -274,6 +306,11 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - durable edge history and session analytics stay internal-only through bounded
   CLI/internal HTTP reads; there is still no public or identity-level operator
   HTTP surface for that history
+- policy and identity management are CLI-only in this line; there is still no
+  HTTP admin surface
+- accepted presence and session truth are staged separately on purpose; current
+  `edge_sessions` still stay source-pass-only even when accepted presence comes
+  from testing policy
 - facility truth is file-backed and internal-only; ATHENA does not invent
   facility defaults from occupancy, dormant Postgres schema files, or mock-only
   settings
@@ -336,7 +373,8 @@ bullets are only the short summary.
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads through a validated internal catalog file | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown, server bounds, and publish resilience | keep the line patch-only and preserve current live semantics | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | `v0.7.0` | Postgres-backed append-only observations, derived session facts, and bounded internal analytics reads | keep the new surfaces internal/CLI-first, preserve ATHENA as the physical-truth ingest boundary, and keep fail-open durable writes explicit | do not widen into booking, public dashboards, AI summaries, alias auto-merge, or prediction |
-| later than `v0.7.0` | broader diagnostics and capacity prediction runtime | build on stable ingress, trusted durable history, derived sessions, and clean facility truth first | do not ship dashboards or predictive UX before prediction itself is real |
+| `v0.8.0` | policy-backed accepted-presence testing line over immutable observations | keep source result immutable, require explicit policy versions, keep HTTP ingress shape unchanged, and keep policy/identity management CLI-only | do not widen into session cutover, operator UI, public reports, alias UX, or prediction |
+| later than `v0.8.0` | broader diagnostics, accepted-presence session cutover, and capacity prediction runtime | build on stable ingress, trusted durable history, explicit accepted presence, and clean facility truth first | do not ship dashboards, public reports, or predictive UX before the accepted-presence truth model is stable |
 
 ## Next Ladder Role
 
@@ -346,7 +384,8 @@ bullets are only the short summary.
 | `v0.6.0` / `Tracer 18` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
 | `v0.6.1` / Milestone 2.0 hardening follow-up | shutdown, publish retry/backoff, and bounded dedupe memory without a new capability line | keeps the physical-truth runtime honest while deployed truth stays unchanged |
 | `v0.7.0` / Phase 3 shared substrate A | Postgres-backed observations, derived session facts, and bounded internal analytics reads | gives manager-grade occupancy and flow work a real substrate before dashboards, scheduling, or AI summary copy |
-| later than `v0.7.0` | broader diagnostics and capacity prediction runtime | earns prediction only after ingress, history, session analytics, and facility truth are stable |
+| current `v0.8.0` line | policy-backed accepted presence for explicit recognized-denied testing windows | makes testing admission truth explicit without rewriting TouchNet source `fail` events or destabilizing the live ingest contract |
+| later than `v0.8.0` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | earns later duration/reporting/prediction work only after observation, acceptance, and facility truth are stable |
 
 ## Project Structure
 
