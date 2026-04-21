@@ -1217,6 +1217,10 @@ func newIdentityCmd() *cobra.Command {
 		Use:   "add",
 		Short: "Attach a privacy-safe link to a facility-local subject.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := edgehistory.ValidateIdentityLinkInput(facilityID, subjectID, linkKind, linkKey, linkSource); err != nil {
+				return err
+			}
+
 			store, err := edgehistory.NewPostgresStore(cmd.Context(), postgresDSN)
 			if err != nil {
 				return err

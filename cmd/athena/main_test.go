@@ -219,6 +219,34 @@ func TestFacilityCommandsRequireCatalogPath(t *testing.T) {
 	}
 }
 
+func TestIdentityLinkAddRejectsUnsafeKeyBeforeOpeningPostgres(t *testing.T) {
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"identity",
+		"link",
+		"add",
+		"--facility", "ashtonbee",
+		"--subject-id", "550e8400-e29b-41d4-a716-446655440000",
+		"--kind", "member_account",
+		"--key", "1000123456",
+		"--source", "owner_confirmed",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsafe link key validation error")
+	}
+	if !strings.Contains(err.Error(), "member_account link_key must be a canonical lowercase UUID") {
+		t.Fatalf("Execute() error = %q, want member_account UUID validation", err)
+	}
+	if strings.Contains(err.Error(), "Postgres") || strings.Contains(err.Error(), "dsn") {
+		t.Fatalf("Execute() error = %q, validation should happen before opening Postgres", err)
+	}
+}
+
 func TestServeCommandShutsDownCleanlyWhenContextIsCanceled(t *testing.T) {
 	addr := reserveListenAddress(t)
 	t.Setenv("ATHENA_HTTP_ADDR", addr)

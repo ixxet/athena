@@ -1,0 +1,2 @@
+-- No-op: this migration only removes unattached identity subjects that had no
+-- links, policies, or accepted-presence rows.

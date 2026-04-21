@@ -173,6 +173,13 @@ func (s *PostgresStore) EvaluatePolicy(ctx context.Context, evaluation edge.Poli
 }
 
 func ensureSubjectLinkTx(ctx context.Context, tx pgx.Tx, facilityID, externalIdentityHash, accountType string) (string, error) {
+	if err := validateLinkKey("external_identity_hash", externalIdentityHash); err != nil {
+		return "", err
+	}
+	if err := lockSubjectLinkTx(ctx, tx, facilityID, externalIdentityHash); err != nil {
+		return "", err
+	}
+
 	subjectID, found, err := resolveSubjectID(ctx, tx, facilityID, externalIdentityHash)
 	if err != nil {
 		return "", err
@@ -223,6 +230,15 @@ func ensureSubjectLinkTx(ctx context.Context, tx pgx.Tx, facilityID, externalIde
 		return "", fmt.Errorf("resolve edge identity subject after insert race")
 	}
 	return subjectID, nil
+}
+
+func lockSubjectLinkTx(ctx context.Context, tx pgx.Tx, facilityID, externalIdentityHash string) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+	`, "athena:edge_subject:"+strings.TrimSpace(facilityID)+":"+strings.TrimSpace(externalIdentityHash)); err != nil {
+		return fmt.Errorf("lock edge identity subject link: %w", err)
+	}
+	return nil
 }
 
 type subjectLookupQuery interface {

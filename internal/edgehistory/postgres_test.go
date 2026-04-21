@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -461,6 +463,208 @@ func TestPostgresStoreAcceptsRecognizedDeniedThroughFacilityPolicy(t *testing.T)
 	}
 	if report.SessionSummary.ClosedCount != 0 {
 		t.Fatalf("SessionSummary.ClosedCount = %d, want 0", report.SessionSummary.ClosedCount)
+	}
+}
+
+func TestPostgresStoreValidatesPrivacySafeIdentityLinkKeys(t *testing.T) {
+	store := newPostgresStore(t)
+	hash := edge.HashAccount("1000123456", "salt")
+
+	if err := store.RecordObservation(context.Background(), edge.ObservationRecord{
+		EventID:              "edge-link-subject-001",
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		NodeID:               "entry-node",
+		Direction:            domain.DirectionIn,
+		Result:               "fail",
+		Source:               domain.SourceRFID,
+		ExternalIdentityHash: hash,
+		ObservedAt:           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		StoredAt:             time.Date(2026, 4, 4, 12, 0, 1, 0, time.UTC),
+		FailureReasonCode:    edge.FailureReasonRecognizedDenied,
+	}); err != nil {
+		t.Fatalf("RecordObservation() error = %v", err)
+	}
+
+	subject, ok, err := store.GetIdentitySubject(context.Background(), "ashtonbee", "", hash)
+	if err != nil {
+		t.Fatalf("GetIdentitySubject() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetIdentitySubject() ok = false, want true")
+	}
+
+	if err := store.AddIdentityLink(context.Background(), "ashtonbee", subject.SubjectID, "member_account", "1000123456", "owner_confirmed", "Standard"); err == nil {
+		t.Fatal("AddIdentityLink(raw member number) error = nil, want privacy-safe validation error")
+	} else if !strings.Contains(err.Error(), "member_account link_key must be a canonical lowercase UUID") {
+		t.Fatalf("AddIdentityLink() error = %q, want member_account UUID validation", err)
+	}
+
+	if err := store.AddIdentityLink(context.Background(), "ashtonbee", subject.SubjectID, "external_identity_hash", strings.ToUpper(hash), "owner_confirmed", "Standard"); err == nil {
+		t.Fatal("AddIdentityLink(uppercase hash) error = nil, want lowercase hash validation error")
+	} else if !strings.Contains(err.Error(), "64-character lowercase hex") {
+		t.Fatalf("AddIdentityLink() error = %q, want lowercase hash validation", err)
+	}
+
+	if err := store.AddIdentityLink(context.Background(), "ashtonbee", subject.SubjectID, "member_account", "550e8400-e29b-41d4-a716-446655440000", "owner_confirmed", "Standard"); err != nil {
+		t.Fatalf("AddIdentityLink(valid UUID) error = %v", err)
+	}
+}
+
+func TestPostgresStoreSerializesSubjectCreation(t *testing.T) {
+	store := newPostgresStore(t)
+	hash := edge.HashAccount("1000123456", "salt")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 24)
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			errs <- store.RecordObservation(context.Background(), edge.ObservationRecord{
+				EventID:              fmt.Sprintf("edge-subject-race-%03d", index),
+				FacilityID:           "ashtonbee",
+				ZoneID:               "gym-floor",
+				NodeID:               "entry-node",
+				Direction:            domain.DirectionIn,
+				Result:               "fail",
+				Source:               domain.SourceRFID,
+				ExternalIdentityHash: hash,
+				ObservedAt:           time.Date(2026, 4, 4, 12, index, 0, 0, time.UTC),
+				StoredAt:             time.Date(2026, 4, 4, 12, index, 1, 0, time.UTC),
+				FailureReasonCode:    edge.FailureReasonRecognizedDenied,
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RecordObservation() concurrent error = %v", err)
+		}
+	}
+
+	var linkCount int
+	if err := store.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM athena.edge_identity_links
+		WHERE facility_id = 'ashtonbee'
+			AND link_kind = 'external_identity_hash'
+			AND link_key = $1
+	`, hash).Scan(&linkCount); err != nil {
+		t.Fatalf("count edge identity links error = %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("identity link count = %d, want 1", linkCount)
+	}
+
+	if got := countRows(t, store, "athena.edge_identity_subjects"); got != 1 {
+		t.Fatalf("edge_identity_subjects rows = %d, want 1", got)
+	}
+}
+
+func TestPostgresStorePolicyPrecedenceAndOverlapRules(t *testing.T) {
+	store := newPostgresStore(t)
+	hash := edge.HashAccount("1000123456", "salt")
+
+	if err := store.RecordObservation(context.Background(), edge.ObservationRecord{
+		EventID:              "edge-policy-subject-001",
+		FacilityID:           "ashtonbee",
+		ZoneID:               "gym-floor",
+		NodeID:               "entry-node",
+		Direction:            domain.DirectionIn,
+		Result:               "fail",
+		Source:               domain.SourceRFID,
+		ExternalIdentityHash: hash,
+		ObservedAt:           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		StoredAt:             time.Date(2026, 4, 4, 12, 0, 1, 0, time.UTC),
+		FailureReasonCode:    edge.FailureReasonRecognizedDenied,
+	}); err != nil {
+		t.Fatalf("RecordObservation() error = %v", err)
+	}
+	subject, ok, err := store.GetIdentitySubject(context.Background(), "ashtonbee", "", hash)
+	if err != nil {
+		t.Fatalf("GetIdentitySubject() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetIdentitySubject() ok = false, want true")
+	}
+
+	startsAt := time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC)
+	endsAt := time.Date(2026, 4, 4, 13, 0, 0, 0, time.UTC)
+	if _, err := store.CreateFacilityWindowPolicy(context.Background(), CreateFacilityWindowPolicyInput{
+		FacilityID:         "ashtonbee",
+		StartsAt:           startsAt,
+		EndsAt:             endsAt,
+		ReasonCode:         "testing_rollout",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	}); err != nil {
+		t.Fatalf("CreateFacilityWindowPolicy() error = %v", err)
+	}
+
+	if _, err := store.CreateFacilityWindowPolicy(context.Background(), CreateFacilityWindowPolicyInput{
+		FacilityID:         "ashtonbee",
+		StartsAt:           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		EndsAt:             time.Date(2026, 4, 4, 14, 0, 0, 0, time.UTC),
+		ReasonCode:         "testing_rollout",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	}); err == nil {
+		t.Fatal("CreateFacilityWindowPolicy(overlap) error = nil, want overlap rejection")
+	} else if !strings.Contains(err.Error(), "overlapping enabled facility policy") {
+		t.Fatalf("CreateFacilityWindowPolicy(overlap) error = %q, want overlap rejection", err)
+	}
+
+	if _, err := store.CreateSubjectPolicy(context.Background(), CreateSubjectPolicyInput{
+		FacilityID:         "ashtonbee",
+		SubjectID:          subject.SubjectID,
+		PolicyMode:         "always_admit",
+		StartsAt:           startsAt,
+		ReasonCode:         "owner_exception",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	}); err != nil {
+		t.Fatalf("CreateSubjectPolicy() error = %v", err)
+	}
+
+	graceEndsAt := time.Date(2026, 4, 4, 14, 0, 0, 0, time.UTC)
+	if _, err := store.CreateSubjectPolicy(context.Background(), CreateSubjectPolicyInput{
+		FacilityID:         "ashtonbee",
+		SubjectID:          subject.SubjectID,
+		PolicyMode:         "grace_until",
+		StartsAt:           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC),
+		EndsAt:             &graceEndsAt,
+		ReasonCode:         "semester_rollover",
+		CreatedByActorKind: "owner_user",
+		CreatedByActorID:   "tester",
+		CreatedBySurface:   "athena_cli",
+	}); err == nil {
+		t.Fatal("CreateSubjectPolicy(overlap) error = nil, want overlap rejection")
+	} else if !strings.Contains(err.Error(), "overlapping enabled subject policy") {
+		t.Fatalf("CreateSubjectPolicy(overlap) error = %q, want subject overlap rejection", err)
+	}
+
+	decision, err := store.EvaluatePolicy(context.Background(), edge.PolicyEvaluation{
+		FacilityID:           "ashtonbee",
+		ExternalIdentityHash: hash,
+		FailureReasonCode:    edge.FailureReasonRecognizedDenied,
+		ObservedAt:           time.Date(2026, 4, 4, 12, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("EvaluatePolicy() error = %v", err)
+	}
+	if !decision.Admitted {
+		t.Fatal("EvaluatePolicy() admitted = false, want true")
+	}
+	if decision.AcceptancePath != edge.AcceptancePathAlwaysAdmit {
+		t.Fatalf("AcceptancePath = %q, want %q", decision.AcceptancePath, edge.AcceptancePathAlwaysAdmit)
+	}
+	if decision.AcceptedReasonCode != "owner_exception" {
+		t.Fatalf("AcceptedReasonCode = %q, want owner_exception", decision.AcceptedReasonCode)
 	}
 }
 

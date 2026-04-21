@@ -4,10 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+)
+
+var (
+	externalIdentityHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	uuidPattern                 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 type IdentityLinkRecord struct {
@@ -83,6 +89,11 @@ func (s *PostgresStore) GetIdentitySubject(ctx context.Context, facilityID, subj
 	if subjectID == "" && externalIdentityHash == "" {
 		return IdentitySubjectRecord{}, false, fmt.Errorf("subject_id or external_identity_hash is required")
 	}
+	if externalIdentityHash != "" {
+		if err := validateLinkKey("external_identity_hash", externalIdentityHash); err != nil {
+			return IdentitySubjectRecord{}, false, err
+		}
+	}
 
 	if subjectID == "" {
 		var found bool
@@ -143,20 +154,8 @@ func (s *PostgresStore) GetIdentitySubject(ctx context.Context, facilityID, subj
 }
 
 func (s *PostgresStore) AddIdentityLink(ctx context.Context, facilityID, subjectID, linkKind, linkKey, linkSource, accountType string) error {
-	if strings.TrimSpace(facilityID) == "" {
-		return fmt.Errorf("facility_id is required")
-	}
-	if strings.TrimSpace(subjectID) == "" {
-		return fmt.Errorf("subject_id is required")
-	}
-	if err := validateLinkKind(linkKind); err != nil {
+	if err := ValidateIdentityLinkInput(facilityID, subjectID, linkKind, linkKey, linkSource); err != nil {
 		return err
-	}
-	if err := validateLinkSource(linkSource); err != nil {
-		return err
-	}
-	if strings.TrimSpace(linkKey) == "" {
-		return fmt.Errorf("link_key is required")
 	}
 
 	_, err := s.pool.Exec(ctx, `
@@ -192,8 +191,11 @@ func (s *PostgresStore) CreateSubjectPolicy(ctx context.Context, input CreateSub
 		return PolicyRecord{}, err
 	}
 
+	facilityID := strings.TrimSpace(input.FacilityID)
+	subjectID := strings.TrimSpace(input.SubjectID)
+	policyMode := strings.TrimSpace(input.PolicyMode)
 	targetSelector := "subject_only"
-	switch strings.TrimSpace(input.PolicyMode) {
+	switch policyMode {
 	case "always_admit":
 		if input.EndsAt != nil {
 			return PolicyRecord{}, fmt.Errorf("ends_at must be empty for always_admit")
@@ -214,6 +216,13 @@ func (s *PostgresStore) CreateSubjectPolicy(ctx context.Context, input CreateSub
 		_ = tx.Rollback(ctx)
 	}()
 
+	if err := lockPolicyScopeTx(ctx, tx, facilityID, subjectID); err != nil {
+		return PolicyRecord{}, err
+	}
+	if err := rejectOverlappingPolicyTx(ctx, tx, facilityID, subjectID, input.StartsAt.UTC(), copyTime(input.EndsAt)); err != nil {
+		return PolicyRecord{}, err
+	}
+
 	var policyID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO athena.edge_access_policies (
@@ -221,11 +230,11 @@ func (s *PostgresStore) CreateSubjectPolicy(ctx context.Context, input CreateSub
 			subject_id
 		) VALUES ($1, $2)
 		RETURNING policy_id::text
-	`, strings.TrimSpace(input.FacilityID), strings.TrimSpace(input.SubjectID)).Scan(&policyID); err != nil {
+	`, facilityID, subjectID).Scan(&policyID); err != nil {
 		return PolicyRecord{}, fmt.Errorf("insert edge access policy: %w", err)
 	}
 
-	record, err := insertPolicyVersionTx(ctx, tx, policyID, strings.TrimSpace(input.FacilityID), strings.TrimSpace(input.SubjectID), true, strings.TrimSpace(input.PolicyMode), targetSelector, input.StartsAt.UTC(), copyTime(input.EndsAt), strings.TrimSpace(input.ReasonCode), strings.TrimSpace(input.CreatedByActorKind), strings.TrimSpace(input.CreatedByActorID), strings.TrimSpace(input.CreatedBySurface))
+	record, err := insertPolicyVersionTx(ctx, tx, policyID, facilityID, subjectID, true, policyMode, targetSelector, input.StartsAt.UTC(), copyTime(input.EndsAt), strings.TrimSpace(input.ReasonCode), strings.TrimSpace(input.CreatedByActorKind), strings.TrimSpace(input.CreatedByActorID), strings.TrimSpace(input.CreatedBySurface))
 	if err != nil {
 		return PolicyRecord{}, err
 	}
@@ -255,6 +264,7 @@ func (s *PostgresStore) CreateFacilityWindowPolicy(ctx context.Context, input Cr
 		return PolicyRecord{}, err
 	}
 
+	facilityID := strings.TrimSpace(input.FacilityID)
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return PolicyRecord{}, fmt.Errorf("begin facility policy transaction: %w", err)
@@ -263,6 +273,14 @@ func (s *PostgresStore) CreateFacilityWindowPolicy(ctx context.Context, input Cr
 		_ = tx.Rollback(ctx)
 	}()
 
+	if err := lockPolicyScopeTx(ctx, tx, facilityID, ""); err != nil {
+		return PolicyRecord{}, err
+	}
+	endsAtUTC := input.EndsAt.UTC()
+	if err := rejectOverlappingPolicyTx(ctx, tx, facilityID, "", input.StartsAt.UTC(), &endsAtUTC); err != nil {
+		return PolicyRecord{}, err
+	}
+
 	var policyID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO athena.edge_access_policies (
@@ -270,12 +288,11 @@ func (s *PostgresStore) CreateFacilityWindowPolicy(ctx context.Context, input Cr
 			subject_id
 		) VALUES ($1, NULL)
 		RETURNING policy_id::text
-	`, strings.TrimSpace(input.FacilityID)).Scan(&policyID); err != nil {
+	`, facilityID).Scan(&policyID); err != nil {
 		return PolicyRecord{}, fmt.Errorf("insert facility edge access policy: %w", err)
 	}
 
-	endsAtUTC := input.EndsAt.UTC()
-	record, err := insertPolicyVersionTx(ctx, tx, policyID, strings.TrimSpace(input.FacilityID), "", true, "facility_window", "recognized_denied_only", input.StartsAt.UTC(), &endsAtUTC, strings.TrimSpace(input.ReasonCode), strings.TrimSpace(input.CreatedByActorKind), strings.TrimSpace(input.CreatedByActorID), strings.TrimSpace(input.CreatedBySurface))
+	record, err := insertPolicyVersionTx(ctx, tx, policyID, facilityID, "", true, "facility_window", "recognized_denied_only", input.StartsAt.UTC(), &endsAtUTC, strings.TrimSpace(input.ReasonCode), strings.TrimSpace(input.CreatedByActorKind), strings.TrimSpace(input.CreatedByActorID), strings.TrimSpace(input.CreatedBySurface))
 	if err != nil {
 		return PolicyRecord{}, err
 	}
@@ -529,6 +546,22 @@ func insertPolicyVersionTx(ctx context.Context, tx pgx.Tx, policyID, facilityID,
 	return record, nil
 }
 
+func ValidateIdentityLinkInput(facilityID, subjectID, linkKind, linkKey, linkSource string) error {
+	if strings.TrimSpace(facilityID) == "" {
+		return fmt.Errorf("facility_id is required")
+	}
+	if strings.TrimSpace(subjectID) == "" {
+		return fmt.Errorf("subject_id is required")
+	}
+	if err := validateLinkKind(linkKind); err != nil {
+		return err
+	}
+	if err := validateLinkSource(linkSource); err != nil {
+		return err
+	}
+	return validateLinkKey(linkKind, linkKey)
+}
+
 func validateLinkKind(linkKind string) error {
 	switch strings.TrimSpace(linkKind) {
 	case "external_identity_hash", "member_account", "qr_identity":
@@ -536,6 +569,27 @@ func validateLinkKind(linkKind string) error {
 	default:
 		return fmt.Errorf("link_kind %q must be one of external_identity_hash,member_account,qr_identity", linkKind)
 	}
+}
+
+func validateLinkKey(linkKind, linkKey string) error {
+	linkKind = strings.TrimSpace(linkKind)
+	linkKey = strings.TrimSpace(linkKey)
+	if linkKey == "" {
+		return fmt.Errorf("link_key is required")
+	}
+	switch linkKind {
+	case "external_identity_hash":
+		if !externalIdentityHashPattern.MatchString(linkKey) {
+			return fmt.Errorf("external_identity_hash link_key must be a 64-character lowercase hex hash")
+		}
+	case "member_account", "qr_identity":
+		if !uuidPattern.MatchString(linkKey) {
+			return fmt.Errorf("%s link_key must be a canonical lowercase UUID", linkKind)
+		}
+	default:
+		return validateLinkKind(linkKind)
+	}
+	return nil
 }
 
 func validateLinkSource(linkSource string) error {
@@ -568,4 +622,66 @@ func validateActor(actorKind, actorSurface string) error {
 		return fmt.Errorf("created_by_surface %q must be one of athena_cli,migration_seed,future_admin_http", actorSurface)
 	}
 	return nil
+}
+
+func lockPolicyScopeTx(ctx context.Context, tx pgx.Tx, facilityID, subjectID string) error {
+	scope := "facility_window"
+	if strings.TrimSpace(subjectID) != "" {
+		scope = "subject:" + strings.TrimSpace(subjectID)
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+	`, "athena:edge_policy:"+strings.TrimSpace(facilityID)+":"+scope); err != nil {
+		return fmt.Errorf("lock edge policy scope: %w", err)
+	}
+	return nil
+}
+
+func rejectOverlappingPolicyTx(ctx context.Context, tx pgx.Tx, facilityID, subjectID string, startsAt time.Time, endsAt *time.Time) error {
+	var endsAtArg any
+	if endsAt != nil {
+		endsAtUTC := endsAt.UTC()
+		endsAtArg = endsAtUTC
+	}
+
+	var existingPolicyID string
+	if err := tx.QueryRow(ctx, `
+		WITH latest_versions AS (
+			SELECT DISTINCT ON (v.policy_id)
+				p.policy_id::text,
+				p.subject_id,
+				v.is_enabled,
+				v.target_selector,
+				v.starts_at,
+				v.ends_at
+			FROM athena.edge_access_policies p
+			JOIN athena.edge_access_policy_versions v
+				ON v.policy_id = p.policy_id
+			WHERE p.facility_id = $1
+			ORDER BY v.policy_id, v.version_number DESC
+		)
+		SELECT policy_id
+		FROM latest_versions
+		WHERE
+			is_enabled
+			AND (
+				($2 = '' AND subject_id IS NULL AND target_selector = 'recognized_denied_only')
+				OR
+				($2 <> '' AND subject_id = NULLIF($2, '')::uuid AND target_selector = 'subject_only')
+			)
+			AND starts_at <= COALESCE($4::timestamptz, 'infinity'::timestamptz)
+			AND COALESCE(ends_at, 'infinity'::timestamptz) >= $3
+		LIMIT 1
+	`, strings.TrimSpace(facilityID), strings.TrimSpace(subjectID), startsAt.UTC(), endsAtArg).Scan(&existingPolicyID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("check overlapping edge policy: %w", err)
+	}
+
+	scope := "facility"
+	if strings.TrimSpace(subjectID) != "" {
+		scope = "subject"
+	}
+	return fmt.Errorf("overlapping enabled %s policy already exists: %s", scope, existingPolicyID)
 }
