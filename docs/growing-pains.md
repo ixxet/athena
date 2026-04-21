@@ -288,8 +288,29 @@ prediction mistakes, and the fixes that made `athena` more operationally solid.
   over in the same packet.
   Cause: once accepted presence became explicit, it looked attractive to let
   every later analytic layer switch at once.
-  Fix: move occupancy and replay onto accepted-presence truth in `v0.8.0`, but
+  Fix: move occupancy and replay onto accepted-presence truth in `v0.8.x`, but
   keep `edge_sessions` source-pass-only until a later dedicated session-cutover
   line.
   Rule: accepted presence and stay-duration/session truth should be staged
   separately when the semantics are still settling.
+
+- Symptom: the first policy/identity operator surface could still accept raw
+  account-like link keys and relied on operator discipline to keep links
+  privacy-safe.
+  Cause: the first `v0.8.0` implementation modeled privacy-safe links in the
+  schema and docs, but did not enforce link-key shape in code.
+  Fix: require `external_identity_hash` links to be 64-character lowercase hex
+  and `member_account` / `qr_identity` links to be canonical lowercase UUIDs.
+  Rule: privacy boundaries should be enforced by runtime validation, not help
+  text.
+
+- Symptom: first-seen subject creation could leave unattached subject rows under
+  a race, and policy precedence existed in SQL before it was documented.
+  Cause: the policy-backed admission line started as a minimal live testing
+  substrate and left concurrency/precedence discipline implicit.
+  Fix: add transaction-scoped advisory locks for first-seen subject linkage,
+  reject overlapping enabled policies in the same scope, document subject policy
+  precedence over facility windows, and add a conservative cleanup migration
+  for subjects with no links, policies, or acceptances.
+  Rule: once a behavior is real in runtime, document and test it instead of
+  calling it deferred.

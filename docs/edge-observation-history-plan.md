@@ -3,7 +3,7 @@
 ## Purpose
 
 This document now records the layered ATHENA storage model after the closed
-`v0.7.x` storage/analytics line and the current `v0.8.0`
+`v0.7.x` storage/analytics line and the current `v0.8.x`
 policy-backed-admission testing line.
 
 The planning question is no longer just:
@@ -27,7 +27,11 @@ ATHENA already does all of the following in repo/runtime:
 - keeps source observation truth immutable even when a policy-backed admission
   decision exists later for the same tap
 - maintains facility-local identity subjects and privacy-safe identity links
+- enforces privacy-safe link-key shapes instead of trusting operator
+  discipline
 - maintains explicit access policy versions with actor attribution
+- gives subject-scoped policies precedence over facility windows and rejects
+  overlapping active policies in the same scope
 - maintains explicit accepted-presence records separate from source observation
   rows
 - replays occupancy from accepted-presence truth on restart
@@ -36,11 +40,14 @@ ATHENA already does all of the following in repo/runtime:
 - keeps the older file-backed history path only as an explicit fallback when
   Postgres is not configured
 
-Bounded deployed truth remains behind the repo/runtime line:
+Bounded deployed truth is intentionally narrower than every possible code path:
 
-- the bounded live deployment still proves the `v0.7.0` storage/analytics line
-- the new `v0.8.0` policy-backed-acceptance line is repo/runtime truth until a
-  separate deployment packet proves it live
+- the bounded live deployment proved migration, rollout, replay, health, policy
+  creation/readback, and runtime wiring for `v0.8.1`
+- it intentionally did not inject a synthetic production `recognized_denied`
+  tap because durable production history is immutable
+- `v0.8.2` adds hardening around identity-link validation, first-seen subject
+  creation, policy overlap rejection, and orphan cleanup
 
 ## Layered Truth Model
 
@@ -79,26 +86,35 @@ This is the linkage layer, not the observation layer.
 `athena.edge_access_policies` and `athena.edge_access_policy_versions` record
 who authorized admission logic and when.
 
-Current `v0.8.0` policy modes:
+Current `v0.8.x` policy modes:
 
 - subject `always_admit`
 - subject `grace_until`
 - facility `facility_window` with
   `target_selector='recognized_denied_only'`
 
-Current `v0.8.0` reason codes:
+Current `v0.8.x` reason codes:
 
 - `testing_rollout`
 - `alumni_exception`
 - `semester_rollover`
 - `owner_exception`
 
-Current `v0.8.0` actor attribution:
+Current `v0.8.x` actor attribution:
 
 - actor kinds: `owner_user`, `service_account`, `system`
 - surfaces: `athena_cli`, `migration_seed`, `future_admin_http`
 
 This is the explicit policy layer.
+
+Policy precedence in `v0.8.x` is explicit:
+
+- subject-scoped policies beat facility-wide testing windows
+- overlapping enabled subject policies for the same subject are rejected on
+  create
+- overlapping enabled facility windows for the same facility are rejected on
+  create
+- disabled policies remain historical versions, not deleted facts
 
 ### 4. Explicit accepted-presence truth
 
@@ -132,11 +148,11 @@ This is the accepted-presence layer.
 
 `athena.edge_sessions` still exists as a derived session layer.
 
-Current `v0.8.0` rule:
+Current `v0.8.x` rule:
 
 - session derivation remains source-pass-only
 
-That is deliberate. `v0.8.0` moves occupancy and replay onto accepted-presence
+That is deliberate. `v0.8.x` moves occupancy and replay onto accepted-presence
 truth, but it does not yet claim stay-duration truth for policy-backed accepted
 fails.
 
@@ -144,7 +160,7 @@ This is the staged-derived layer.
 
 ## Current Testing-Policy Boundary
 
-The first-class testing policy in `v0.8.0` is facility-wide and explicit:
+The first-class testing policy in `v0.8.x` is facility-wide and explicit:
 
 - `ATHENA_EDGE_POLICY_ACCEPTANCE_ENABLED=true`
 - an active facility policy window exists

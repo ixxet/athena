@@ -10,10 +10,10 @@ publication path that other repos depend on.
 > projection for `serve`, Postgres-backed append-only edge observations with
 > derived session facts, compact durable identity markers for projector misses,
 > accepted-presence truth backed by facility-local identity subjects, policy
-> versions, and acceptance records in the current `v0.8.0` repo/runtime line,
+> versions, and acceptance records in the current `v0.8.x` repo/runtime line,
 > bounded internal analytics reads, bounded retry/backoff publication with
 > bounded process-local dedupe, bounded live browser-reachable deployment of
-> the narrower `v0.7.0` storage/analytics line, and shared `ashton-proto`
+> the `v0.8.1` policy-backed accepted-presence line, and shared `ashton-proto`
 > runtime contracts for arrival and departure events.
 
 The repo is still growing, but it is no longer docs-first. The important thing
@@ -113,7 +113,7 @@ flowchart LR
 | Durable edge history | Append-only Postgres observation tables plus commit markers | Real, explicit, repo/runtime | `v0.7.0` | Stores privacy-safe `pass` and `fail` observations append-only without leaking raw account values, names, or free-text status messages |
 | Durable projector miss guardrail | Compact Postgres or file-backed identity markers keyed by facility, zone, and hashed identity | Real, explicit, repo/runtime | `v0.7.2` | Rejects older or duplicate pass events after absent-state eviction without turning markers into a second occupancy authority |
 | Derived session analytics | Postgres-backed `edge_sessions` read model plus bounded internal HTTP/CLI reads | Real, internal-only | later than `v0.6.1` | Derives `open`, `closed`, and `unmatched_exit` session facts from accepted `pass` observations without rewriting the original observation history |
-| Policy-backed accepted presence | Postgres identity subjects/links, policy versions, acceptance records, and owner CLI | Real, explicit, repo/runtime, internal-only | `v0.8.0` | Keeps source `fail` truth immutable while allowing explicit accepted-presence truth for recognized-denied testing windows |
+| Policy-backed accepted presence | Postgres identity subjects/links, policy versions, acceptance records, and owner CLI | Real, explicit, repo/runtime, internal-only | `v0.8.x` | Keeps source `fail` truth immutable while allowing explicit accepted-presence truth for recognized-denied testing windows |
 | Legacy file-backed history | Append-only file journal plus replay helper | Still available, explicit fallback | `v0.5.0` | Keeps the older local/runtime durable-history path available when Postgres is not configured, but it is no longer the primary storage line for this repo/runtime slice |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
@@ -193,6 +193,11 @@ Current runtime behavior is intentionally layered:
   operational fields; the new policy and identity tables also keep raw account
   values, resolved names, and free-text `status_message` out of durable
   storage
+- identity links are shape-enforced: `external_identity_hash` must be
+  64-character lowercase hex, and `member_account` / `qr_identity` must be
+  canonical lowercase UUIDs
+- subject-scoped policies beat facility windows, and overlapping active
+  policies in the same scope are rejected on create
 - policy-backed accepted presence now affects live occupancy, replay rebuild,
   and downstream publish, but current `edge_sessions` still derive from
   source-pass accepted observations only
@@ -373,8 +378,8 @@ bullets are only the short summary.
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads through a validated internal catalog file | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown, server bounds, and publish resilience | keep the line patch-only and preserve current live semantics | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | `v0.7.0` | Postgres-backed append-only observations, derived session facts, and bounded internal analytics reads | keep the new surfaces internal/CLI-first, preserve ATHENA as the physical-truth ingest boundary, and keep fail-open durable writes explicit | do not widen into booking, public dashboards, AI summaries, alias auto-merge, or prediction |
-| `v0.8.0` | policy-backed accepted-presence testing line over immutable observations | keep source result immutable, require explicit policy versions, keep HTTP ingress shape unchanged, and keep policy/identity management CLI-only | do not widen into session cutover, operator UI, public reports, alias UX, or prediction |
-| later than `v0.8.0` | broader diagnostics, accepted-presence session cutover, and capacity prediction runtime | build on stable ingress, trusted durable history, explicit accepted presence, and clean facility truth first | do not ship dashboards, public reports, or predictive UX before the accepted-presence truth model is stable |
+| `v0.8.x` | policy-backed accepted-presence testing line over immutable observations | keep source result immutable, require explicit policy versions, enforce privacy-safe links, keep HTTP ingress shape unchanged, and keep policy/identity management CLI-only | do not widen into session cutover, operator UI, public reports, alias UX, or prediction |
+| later than `v0.8.x` | broader diagnostics, accepted-presence session cutover, and capacity prediction runtime | build on stable ingress, trusted durable history, explicit accepted presence, and clean facility truth first | do not ship dashboards, public reports, or predictive UX before the accepted-presence truth model is stable |
 
 ## Next Ladder Role
 
@@ -384,8 +389,8 @@ bullets are only the short summary.
 | `v0.6.0` / `Tracer 18` | facility catalog, hours, zones, closure windows, and per-facility metadata reads | gives later sports, scheduling, and reporting logic trustworthy facility truth |
 | `v0.6.1` / Milestone 2.0 hardening follow-up | shutdown, publish retry/backoff, and bounded dedupe memory without a new capability line | keeps the physical-truth runtime honest while deployed truth stays unchanged |
 | `v0.7.0` / Phase 3 shared substrate A | Postgres-backed observations, derived session facts, and bounded internal analytics reads | gives manager-grade occupancy and flow work a real substrate before dashboards, scheduling, or AI summary copy |
-| current `v0.8.0` line | policy-backed accepted presence for explicit recognized-denied testing windows | makes testing admission truth explicit without rewriting TouchNet source `fail` events or destabilizing the live ingest contract |
-| later than `v0.8.0` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | earns later duration/reporting/prediction work only after observation, acceptance, and facility truth are stable |
+| current `v0.8.x` line | policy-backed accepted presence for explicit recognized-denied testing windows | makes testing admission truth explicit without rewriting TouchNet source `fail` events or destabilizing the live ingest contract |
+| later than `v0.8.x` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | earns later duration/reporting/prediction work only after observation, acceptance, and facility truth are stable |
 
 ## Project Structure
 
