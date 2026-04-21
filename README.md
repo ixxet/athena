@@ -13,8 +13,8 @@ publication path that other repos depend on.
 > versions, and acceptance records in the current `v0.8.x` repo/runtime line,
 > bounded internal analytics reads, bounded retry/backoff publication with
 > bounded process-local dedupe, bounded live browser-reachable deployment of
-> the `v0.8.1` policy-backed accepted-presence line, and shared `ashton-proto`
-> runtime contracts for arrival and departure events.
+> the `v0.8.2` policy-backed accepted-presence hardening line, and shared
+> `ashton-proto` runtime contracts for arrival and departure events.
 
 The repo is still growing, but it is no longer docs-first. The important thing
 now is to document the real narrow slice honestly while leaving wider adapter,

@@ -43,11 +43,12 @@ ATHENA already does all of the following in repo/runtime:
 Bounded deployed truth is intentionally narrower than every possible code path:
 
 - the bounded live deployment proved migration, rollout, replay, health, policy
-  creation/readback, and runtime wiring for `v0.8.1`
+  creation/readback, runtime wiring, and the conservative unattached-subject
+  cleanup migration for `v0.8.2`
 - it intentionally did not inject a synthetic production `recognized_denied`
   tap because durable production history is immutable
-- `v0.8.2` adds hardening around identity-link validation, first-seen subject
-  creation, policy overlap rejection, and orphan cleanup
+- `v0.8.2` hardens identity-link validation, first-seen subject creation,
+  policy overlap rejection, and orphan cleanup
 
 ## Layered Truth Model
 

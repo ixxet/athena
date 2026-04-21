@@ -43,9 +43,10 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
   real for the deployed `v0.7.0` line
 - the older local file-backed durable history path remains available only as an
   explicit fallback when Postgres is not configured
-- bounded deployed truth for `v0.8.1` proves migration, rollout, replay,
-  health, policy creation/readback, and runtime wiring; it intentionally did
-  not inject a synthetic production `recognized_denied` tap
+- bounded deployed truth for `v0.8.2` proves migration, rollout, replay,
+  health, policy creation/readback, runtime wiring, and the conservative
+  unattached-subject cleanup migration; it intentionally did not inject a
+  synthetic production `recognized_denied` tap
 
 ## Current And Planned Release Lines
 
