@@ -137,9 +137,10 @@ Template note:
   workstations
 - use `touchnet-edge-template-legacy.user.js` for older ChromeOS or legacy
   Tampermonkey environments
-- keep live-token workstation variants local only; the repo now ignores
-  `touchnet-edge-live-*.user.js` so active secrets do not get committed by
-  accident
+- keep real secret-bearing workstation copies local only so active node tokens
+  do not get committed by accident
+- the repo ignore rule for `touchnet-edge-live-*.user.js` keeps those local
+  workstation variants out of Git as long as they stay untracked
 
 Current bounded node registry:
 
@@ -161,7 +162,9 @@ For the real TouchNet page:
 1. Open the Verify Account Entry page in Chrome.
 2. Open Tampermonkey, enable the `Ashton TouchNet Edge Bridge` script, and save it.
 3. Set the script values:
-   - `baseUrl` to your local ATHENA URL, usually `http://127.0.0.1:18090`
+   - `baseUrl` to `https://tap.lintellabs.net` for the live cluster, or to your
+     local ATHENA URL such as `http://127.0.0.1:18090` only when doing a local
+     workstation smoke
    - `nodeId` to the node configured in `ATHENA_EDGE_TOKENS`
    - `token` to the token paired with that node
 4. Refresh the TouchNet page once after saving the script.
@@ -173,6 +176,21 @@ For the real TouchNet page:
 
 The userscript posts through Tampermonkey's cross-origin request API, so it is
 better suited to a real browser test than plain in-page `fetch()`.
+
+## Workstation Runtime Notes
+
+- the modern and legacy scripts now match only TouchNet-like hosts plus the
+  local `file://` fixture, instead of running on every page
+- routine success-path console logging is off by default; warnings now only
+  surface on misconfiguration or failed delivery
+- the red focus banner stays disabled unless `showFocusBanner` is turned on for
+  troubleshooting
+- if multiple workstation scripts are accidentally enabled in one browser
+  profile, only the first one will activate on a page
+- Chrome lag is more likely when:
+  - multiple workstation scripts are enabled in the same profile
+  - a very broad `@match` keeps the script active on unrelated pages
+  - DevTools is left open on a noisy legacy script build
 
 ## Bounded Live Deployment Proof
 

@@ -1,9 +1,13 @@
 // ==UserScript==
 // @name         Ashton TouchNet Edge Bridge (Template Legacy)
 // @namespace    https://github.com/ixxet/athena
-// @version      0.3.0
+// @version      0.4.0
 // @description  Legacy-safe template for older ChromeOS / Tampermonkey environments. Replace the placeholder config values before use.
-// @match        *://*/*
+// @match        *://securetouchnet.net/*
+// @match        *://*.securetouchnet.net/*
+// @match        *://secure.touchnet.net/*
+// @match        *://*.secure.touchnet.net/*
+// @match        *://*.touchnet.net/*
 // @match        file://*/*
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
@@ -17,7 +21,7 @@
 
   var CONFIG = {
     // Replace with the real public ATHENA ingress URL, for example:
-    // https://athena-edge.example.com
+    // https://tap.lintellabs.net
     baseUrl: 'https://REPLACE-ATHENA-EDGE.example.com',
 
     // Workstation identity only. Do not encode entry/exit here.
@@ -34,15 +38,70 @@
     tableBodySelector: '#verify-account-access-transaction-list > tbody',
     inputSelector: '#verify_account_number',
     seenLimit: 200,
-    retryIntervalMs: 5000,
-    readyPollMs: 1000,
-    focusPollMs: 1000,
-    // Disable the red focus banner by default. Turn this on only when
-    // troubleshooting scanner-focus problems on a workstation.
+    retryIntervalMs: 15000,
+    readyPollMs: 3000,
+    focusPollMs: 2000,
     showFocusBanner: false,
-    seenStorageKey: 'ashton.edge.template.legacy.seen',
-    queueStorageKey: 'ashton.edge.template.legacy.queue'
+    debug: false
   };
+
+  var LOG_PREFIX = 'ASHTON edge legacy';
+  var INSTANCE_KEY = '__ashtonEdgeBridgeNodeId__';
+
+  function shouldActivateOnThisPage() {
+    if (window.location.protocol === 'file:') {
+      return true;
+    }
+
+    return window.location.hostname.toLowerCase().indexOf('touchnet') !== -1;
+  }
+
+  function hasPlaceholderConfig() {
+    var values = [
+      CONFIG.baseUrl,
+      CONFIG.nodeId,
+      CONFIG.token,
+      CONFIG.facilityId,
+      CONFIG.zoneId
+    ];
+    var index;
+
+    for (index = 0; index < values.length; index += 1) {
+      if (String(values[index]).indexOf('REPLACE_') !== -1 || String(values[index]).trim() === 'replace-me') {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function debugLog() {
+    if (!CONFIG.debug) {
+      return;
+    }
+    console.info.apply(console, [LOG_PREFIX + ':'].concat(Array.prototype.slice.call(arguments)));
+  }
+
+  function warnLog() {
+    console.warn.apply(console, [LOG_PREFIX + ':'].concat(Array.prototype.slice.call(arguments)));
+  }
+
+  if (!shouldActivateOnThisPage()) {
+    return;
+  }
+
+  if (hasPlaceholderConfig()) {
+    warnLog('placeholder config detected; script is idle until values are replaced');
+    return;
+  }
+
+  if (window[INSTANCE_KEY] && window[INSTANCE_KEY] !== CONFIG.nodeId) {
+    warnLog('another workstation script is already active on this page', window[INSTANCE_KEY]);
+    return;
+  }
+  window[INSTANCE_KEY] = CONFIG.nodeId;
+
+  var storagePrefix = 'ashton.edge.' + CONFIG.nodeId.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
 
   var state = {
     observer: null,
@@ -50,9 +109,15 @@
     retryTimer: null,
     focusTimer: null,
     banner: null,
-    seen: loadStringArray(CONFIG.seenStorageKey),
-    queue: loadQueue(CONFIG.queueStorageKey)
+    drainingQueue: false,
+    pendingEventIds: {},
+    seen: loadStringArray(storageKey('seen')),
+    queue: loadQueue(storageKey('queue'))
   };
+
+  function storageKey(suffix) {
+    return storagePrefix + '.' + suffix;
+  }
 
   function loadStringArray(key) {
     try {
@@ -60,7 +125,7 @@
       var parsed = JSON.parse(raw || '[]');
       return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
-      console.warn('ASHTON edge legacy: failed to load array', key, error);
+      warnLog('failed to load array', key, error);
       return [];
     }
   }
@@ -69,7 +134,7 @@
     while (state.seen.length > CONFIG.seenLimit) {
       state.seen.shift();
     }
-    window.localStorage.setItem(CONFIG.seenStorageKey, JSON.stringify(state.seen));
+    window.localStorage.setItem(storageKey('seen'), JSON.stringify(state.seen));
   }
 
   function hasSeen(eventId) {
@@ -89,19 +154,19 @@
       var parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
       return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
-      console.warn('ASHTON edge legacy: failed to load retry queue', error);
+      warnLog('failed to load retry queue', error);
       return [];
     }
   }
 
   function persistQueue() {
-    window.localStorage.setItem(CONFIG.queueStorageKey, JSON.stringify(state.queue));
+    window.localStorage.setItem(storageKey('queue'), JSON.stringify(state.queue));
   }
 
   function queueContains(eventId) {
-    var i;
-    for (i = 0; i < state.queue.length; i += 1) {
-      if (state.queue[i] && state.queue[i].event_id === eventId) {
+    var index;
+    for (index = 0; index < state.queue.length; index += 1) {
+      if (state.queue[index] && state.queue[index].event_id === eventId) {
         return true;
       }
     }
@@ -112,21 +177,18 @@
     if (!queueContains(payload.event_id)) {
       state.queue.push(payload);
       persistQueue();
-      console.warn('ASHTON edge legacy: queued payload for retry', payload);
+      warnLog('queued payload for retry', payload.event_id);
     }
   }
 
   function simpleHash(input) {
     var hash = 2166136261;
-    var i;
-    for (i = 0; i < input.length; i += 1) {
-      hash ^= input.charCodeAt(i);
+    var index;
+    for (index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
       hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
     }
-    if (hash < 0) {
-      hash = hash >>> 0;
-    }
-    return ('00000000' + hash.toString(16)).slice(-8);
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
   }
 
   function deriveEventId(rowData) {
@@ -239,6 +301,7 @@
       GM_xmlhttpRequest({
         method: 'POST',
         url: url,
+        timeout: 10000,
         headers: {
           'Content-Type': 'application/json',
           'X-Ashton-Edge-Token': CONFIG.token
@@ -295,32 +358,36 @@
   }
 
   function drainQueue() {
-    if (!state.queue.length) {
+    if (state.drainingQueue || !state.queue.length) {
       return;
     }
 
-    console.info('ASHTON edge legacy: retrying queued payloads', state.queue.length);
+    state.drainingQueue = true;
 
     var remaining = [];
     var index = 0;
 
+    function finish() {
+      state.queue = remaining;
+      persistQueue();
+      state.drainingQueue = false;
+    }
+
     function processNext() {
       var payload;
       if (index >= state.queue.length) {
-        state.queue = remaining;
-        persistQueue();
+        finish();
         return;
       }
 
       payload = state.queue[index];
       index += 1;
 
-      postPayload(payload, function (response) {
+      postPayload(payload, function () {
         rememberEvent(payload.event_id);
-        console.info('ASHTON edge legacy: queued payload accepted', payload.event_id, response);
         processNext();
       }, function (error) {
-        console.warn('ASHTON edge legacy: queued retry failed', error);
+        warnLog('queued retry failed', payload.event_id, error && error.message ? error.message : error);
         remaining.push(payload);
         processNext();
       });
@@ -339,11 +406,11 @@
     }
 
     eventId = deriveEventId(rowData);
-    if (hasSeen(eventId) || queueContains(eventId)) {
-      console.info('ASHTON edge legacy: duplicate row ignored', eventId);
+    if (hasSeen(eventId) || queueContains(eventId) || state.pendingEventIds[eventId]) {
       return;
     }
 
+    state.pendingEventIds[eventId] = true;
     payload = {
       event_id: eventId,
       account_raw: rowData.accountRaw,
@@ -358,27 +425,36 @@
       status_message: rowData.statusMessage
     };
 
-    console.info('ASHTON edge legacy: posting row', payload);
-    postPayload(payload, function (response) {
+    postPayload(payload, function () {
       rememberEvent(eventId);
-      console.info('ASHTON edge legacy: payload accepted', payload, response);
+      delete state.pendingEventIds[eventId];
     }, function (error) {
-      console.warn('ASHTON edge legacy: post failed, queueing for retry', error);
+      warnLog('post failed, queueing for retry', eventId, error && error.message ? error.message : error);
       queuePayload(payload);
+      delete state.pendingEventIds[eventId];
     });
   }
 
   function scanRows(root) {
     var rows;
-    var i;
+    var index;
 
-    if (!root || !root.querySelectorAll) {
+    if (!root) {
+      return;
+    }
+
+    if (root.nodeType === 1 && root.matches && root.matches('tr')) {
+      processRow(root);
+      return;
+    }
+
+    if (!root.querySelectorAll) {
       return;
     }
 
     rows = root.querySelectorAll('tr');
-    for (i = 0; i < rows.length; i += 1) {
-      processRow(rows[i]);
+    for (index = 0; index < rows.length; index += 1) {
+      processRow(rows[index]);
     }
   }
 
@@ -395,25 +471,23 @@
 
     if (typeof MutationObserver === 'function') {
       state.observer = new MutationObserver(function (mutations) {
-        var i;
-        var j;
+        var mutationIndex;
+        var nodeIndex;
         var node;
-        for (i = 0; i < mutations.length; i += 1) {
-          for (j = 0; j < mutations[i].addedNodes.length; j += 1) {
-            node = mutations[i].addedNodes[j];
-            if (node && node.nodeType === 1 && node.matches && node.matches('tr')) {
-              processRow(node);
-            } else if (node && node.nodeType === 1) {
+        for (mutationIndex = 0; mutationIndex < mutations.length; mutationIndex += 1) {
+          for (nodeIndex = 0; nodeIndex < mutations[mutationIndex].addedNodes.length; nodeIndex += 1) {
+            node = mutations[mutationIndex].addedNodes[nodeIndex];
+            if (node && node.nodeType === 1) {
               scanRows(node);
             }
           }
         }
       });
 
-      state.observer.observe(tableBody, { childList: true, subtree: true });
-      console.info('ASHTON edge legacy: observing table body', CONFIG.tableBodySelector);
+      state.observer.observe(tableBody, { childList: true });
+      debugLog('observing table body', CONFIG.tableBodySelector);
     } else {
-      console.warn('ASHTON edge legacy: MutationObserver unavailable, polling existing rows only');
+      warnLog('MutationObserver unavailable, polling existing rows only');
     }
 
     scanRows(tableBody);
@@ -447,9 +521,6 @@
 
   function updateFocusBanner() {
     if (!CONFIG.showFocusBanner) {
-      if (state.banner) {
-        state.banner.style.display = 'none';
-      }
       return;
     }
 
@@ -472,18 +543,32 @@
     }
   }
 
-  console.info('ASHTON edge legacy: script active', window.location.href, CONFIG.nodeId);
-  drainQueue();
+  function cleanup() {
+    if (state.observer && state.observer.disconnect) {
+      state.observer.disconnect();
+    }
+    if (state.readyTimer) {
+      window.clearInterval(state.readyTimer);
+    }
+    if (state.retryTimer) {
+      window.clearInterval(state.retryTimer);
+    }
+    if (state.focusTimer) {
+      window.clearInterval(state.focusTimer);
+    }
+  }
 
+  window.addEventListener('beforeunload', cleanup);
+
+  drainQueue();
+  debugLog('script active', window.location.href, CONFIG.nodeId);
   if (!attachObserver()) {
-    console.warn('ASHTON edge legacy: table not found yet, polling');
     startPolling();
   } else {
     state.retryTimer = window.setInterval(drainQueue, CONFIG.retryIntervalMs);
     if (CONFIG.showFocusBanner) {
       state.focusTimer = window.setInterval(updateFocusBanner, CONFIG.focusPollMs);
+      updateFocusBanner();
     }
   }
-
-  updateFocusBanner();
 })();
