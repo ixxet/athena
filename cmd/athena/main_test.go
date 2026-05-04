@@ -29,6 +29,21 @@ func (serveStubPublisher) Publish(context.Context, string, []byte) error {
 	return nil
 }
 
+type stubIngressBridgeStore struct {
+	report edgehistory.IngressBridgeReport
+	filter edgehistory.IngressBridgeFilter
+	closed int
+}
+
+func (s *stubIngressBridgeStore) ReadIngressBridge(_ context.Context, filter edgehistory.IngressBridgeFilter) (edgehistory.IngressBridgeReport, error) {
+	s.filter = filter
+	return s.report, nil
+}
+
+func (s *stubIngressBridgeStore) Close() {
+	s.closed++
+}
+
 func TestBuildAppWithCSVAdapterFeedsOccupancyReadPath(t *testing.T) {
 	path := writeCSVFixture(t, strings.Join([]string{
 		"event_id,facility_id,zone_id,external_identity_hash,direction,recorded_at",
@@ -138,6 +153,189 @@ func TestEdgeHistoryCommandPrintsRecentDurableObservations(t *testing.T) {
 	}
 	if strings.Contains(output, "1000123456") {
 		t.Fatalf("output leaked raw account number: %s", output)
+	}
+}
+
+func TestEdgeIngressBridgeCommandPrintsRedactedJSON(t *testing.T) {
+	base := time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	stub := &stubIngressBridgeStore{
+		report: edgehistory.IngressBridgeReport{
+			FacilityID: "ashtonbee",
+			ZoneID:     "gym-floor",
+			Since:      base.Add(-time.Hour),
+			Until:      base.Add(time.Hour),
+			Contract: edgehistory.IngressBridgeContract{
+				Scope:          "repo_local_runtime_proof",
+				IdentityOutput: "raw account ids, names, and external identity hashes are redacted",
+			},
+			Summary: edgehistory.IngressBridgeSummary{
+				TotalEvidence:                   1,
+				EligibleCoPresence:              1,
+				EligibleDailyPresence:           1,
+				EligibleReliabilityVerification: 0,
+				ReasonCounts: []edgehistory.ReasonCount{
+					{Code: edgehistory.ReasonAcceptedPresenceWithoutSourcePassSession, Count: 1},
+				},
+			},
+			Evidence: []edgehistory.IngressBridgeEvidence{
+				{
+					EvidenceID:       "evidence-001",
+					EventID:          "edge-policy-fail-001",
+					IdentityPresent:  true,
+					IdentityRef:      "identity-001",
+					FacilityID:       "ashtonbee",
+					ZoneID:           "gym-floor",
+					NodeID:           "entry-node",
+					Direction:        domain.DirectionIn,
+					SourceResult:     "fail",
+					ObservedAt:       testTimePtr(base),
+					AcceptedPresence: true,
+					AcceptancePath:   edge.AcceptancePathFacility,
+					Eligibility: edgehistory.IngressBridgeEligibility{
+						CoPresenceProof: edgehistory.EligibilitySignal{
+							Eligible: true,
+						},
+						PrivateDailyPresence: edgehistory.EligibilitySignal{
+							Eligible: true,
+						},
+						ReliabilityVerification: edgehistory.EligibilitySignal{
+							ReasonCodes: []string{edgehistory.ReasonAcceptedPresenceWithoutSourcePassSession},
+						},
+					},
+					ReasonCodes: []string{edgehistory.ReasonAcceptedPresenceWithoutSourcePassSession},
+				},
+			},
+		},
+	}
+
+	previous := newIngressBridgeStore
+	newIngressBridgeStore = func(_ context.Context, postgresDSN string) (ingressBridgeStore, error) {
+		if postgresDSN != "postgres://fixture" {
+			t.Fatalf("postgresDSN = %q, want fixture dsn", postgresDSN)
+		}
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		newIngressBridgeStore = previous
+	})
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"edge",
+		"ingress-bridge",
+		"--postgres-dsn", "postgres://fixture",
+		"--facility", "ashtonbee",
+		"--zone", "gym-floor",
+		"--since", base.Add(-time.Hour).Format(time.RFC3339),
+		"--until", base.Add(time.Hour).Format(time.RFC3339),
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stub.closed != 1 {
+		t.Fatalf("Close() calls = %d, want 1", stub.closed)
+	}
+	if stub.filter.FacilityID != "ashtonbee" || stub.filter.ZoneID != "gym-floor" {
+		t.Fatalf("filter = %#v, want scoped facility/zone", stub.filter)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"\"scope\": \"repo_local_runtime_proof\"",
+		"\"identity_ref\": \"identity-001\"",
+		"\"accepted_presence\": true",
+		edgehistory.ReasonAcceptedPresenceWithoutSourcePassSession,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output = %q, want %q", output, want)
+		}
+	}
+	for _, unsafe := range []string{"external_identity_hash", "1000123456", "Fixture Student"} {
+		if strings.Contains(output, unsafe) {
+			t.Fatalf("ingress bridge JSON leaked %q: %s", unsafe, output)
+		}
+	}
+}
+
+func TestEdgeIngressBridgeCommandPrintsReadableText(t *testing.T) {
+	base := time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	stub := &stubIngressBridgeStore{
+		report: edgehistory.IngressBridgeReport{
+			FacilityID: "ashtonbee",
+			Since:      base.Add(-time.Hour),
+			Until:      base.Add(time.Hour),
+			Summary: edgehistory.IngressBridgeSummary{
+				TotalEvidence:         1,
+				NoEligibleSignals:     1,
+				EligibleCoPresence:    0,
+				EligibleDailyPresence: 0,
+				ReasonCounts: []edgehistory.ReasonCount{
+					{Code: edgehistory.ReasonSourceFailWithoutAcceptedPresence, Count: 1},
+				},
+			},
+			Evidence: []edgehistory.IngressBridgeEvidence{
+				{
+					EvidenceID:       "evidence-001",
+					EventID:          "edge-fail-001",
+					IdentityPresent:  true,
+					IdentityRef:      "identity-001",
+					FacilityID:       "ashtonbee",
+					NodeID:           "entry-node",
+					Direction:        domain.DirectionIn,
+					SourceResult:     "fail",
+					ObservedAt:       testTimePtr(base),
+					AcceptedPresence: false,
+					ReasonCodes:      []string{edgehistory.ReasonSourceFailWithoutAcceptedPresence},
+				},
+			},
+		},
+	}
+
+	previous := newIngressBridgeStore
+	newIngressBridgeStore = func(context.Context, string) (ingressBridgeStore, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		newIngressBridgeStore = previous
+	})
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{
+		"edge",
+		"ingress-bridge",
+		"--postgres-dsn", "postgres://fixture",
+		"--facility", "ashtonbee",
+		"--since", base.Add(-time.Hour).Format(time.RFC3339),
+		"--until", base.Add(time.Hour).Format(time.RFC3339),
+		"--format", "text",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"facility=ashtonbee",
+		"eligible_co_presence=0",
+		"reason code=source_fail_without_accepted_presence count=1",
+		"evidence evidence_id=evidence-001 event_id=edge-fail-001",
+		"identity_ref=identity-001",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output = %q, want %q", output, want)
+		}
+	}
+	if strings.Contains(output, "external_identity_hash") {
+		t.Fatalf("text output leaked external identity hash field: %s", output)
 	}
 }
 
@@ -395,6 +593,11 @@ func waitForHealthyHTTP(t *testing.T, url string) {
 	}
 
 	t.Fatalf("health endpoint %s did not become ready", url)
+}
+
+func testTimePtr(value time.Time) *time.Time {
+	copy := value.UTC()
+	return &copy
 }
 
 func writeFacilityCatalogFixture(t *testing.T) string {
