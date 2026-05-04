@@ -74,6 +74,15 @@ var newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() erro
 	}, nil
 }
 
+type ingressBridgeStore interface {
+	ReadIngressBridge(context.Context, edgehistory.IngressBridgeFilter) (edgehistory.IngressBridgeReport, error)
+	Close()
+}
+
+var newIngressBridgeStore = func(ctx context.Context, postgresDSN string) (ingressBridgeStore, error) {
+	return edgehistory.NewPostgresStore(ctx, postgresDSN)
+}
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		slog.Error("command failed", "error", err)
@@ -900,6 +909,74 @@ func newEdgeCmd() *cobra.Command {
 	_ = analyticsCmd.MarkFlagRequired("until")
 
 	edgeCmd.AddCommand(analyticsCmd)
+
+	var (
+		bridgePostgresDSN  string
+		bridgeFacilityID   string
+		bridgeZoneID       string
+		bridgeNodeID       string
+		bridgeSince        string
+		bridgeUntil        string
+		bridgeSessionLimit int
+		bridgeFormat       string
+	)
+
+	bridgeCmd := &cobra.Command{
+		Use:   "ingress-bridge",
+		Short: "Classify local edge ingress evidence for future APOLLO trust gates.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := newIngressBridgeStore(cmd.Context(), bridgePostgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			since, err := parseRFC3339Value(bridgeSince, "--since")
+			if err != nil {
+				return err
+			}
+			until, err := parseRFC3339Value(bridgeUntil, "--until")
+			if err != nil {
+				return err
+			}
+
+			report, err := store.ReadIngressBridge(cmd.Context(), edgehistory.IngressBridgeFilter{
+				FacilityID:   bridgeFacilityID,
+				ZoneID:       bridgeZoneID,
+				NodeID:       bridgeNodeID,
+				Since:        since,
+				Until:        until,
+				SessionLimit: bridgeSessionLimit,
+			})
+			if err != nil {
+				return err
+			}
+
+			switch bridgeFormat {
+			case "json":
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(report)
+			case "text":
+				return writeIngressBridgeText(cmd, report)
+			default:
+				return fmt.Errorf("unsupported format %q", bridgeFormat)
+			}
+		},
+	}
+	bridgeCmd.Flags().StringVar(&bridgePostgresDSN, "postgres-dsn", os.Getenv("ATHENA_EDGE_POSTGRES_DSN"), "dsn for the Postgres-backed edge observation store")
+	bridgeCmd.Flags().StringVar(&bridgeFacilityID, "facility", "", "facility id to query")
+	bridgeCmd.Flags().StringVar(&bridgeZoneID, "zone", "", "optional zone id to query")
+	bridgeCmd.Flags().StringVar(&bridgeNodeID, "node", "", "optional node id to query")
+	bridgeCmd.Flags().StringVar(&bridgeSince, "since", "", "inclusive RFC3339 lower bound")
+	bridgeCmd.Flags().StringVar(&bridgeUntil, "until", "", "inclusive RFC3339 upper bound")
+	bridgeCmd.Flags().IntVar(&bridgeSessionLimit, "session-limit", 50, "maximum number of source-pass session facts to print; 0 prints all")
+	bridgeCmd.Flags().StringVar(&bridgeFormat, "format", "text", "output format: text or json")
+	_ = bridgeCmd.MarkFlagRequired("facility")
+	_ = bridgeCmd.MarkFlagRequired("since")
+	_ = bridgeCmd.MarkFlagRequired("until")
+
+	edgeCmd.AddCommand(bridgeCmd)
 	return edgeCmd
 }
 
@@ -1306,6 +1383,84 @@ func writePolicyRecord(cmd *cobra.Command, record edgehistory.PolicyRecord, form
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
+}
+
+func writeIngressBridgeText(cmd *cobra.Command, report edgehistory.IngressBridgeReport) error {
+	if _, err := fmt.Fprintf(
+		cmd.OutOrStdout(),
+		"facility=%s zone=%s node=%s since=%s until=%s evidence=%d sessions=%d eligible_co_presence=%d eligible_daily_presence=%d eligible_reliability=%d no_eligible_signals=%d\n",
+		report.FacilityID,
+		report.ZoneID,
+		report.NodeID,
+		report.Since.Format(time.RFC3339),
+		report.Until.Format(time.RFC3339),
+		report.Summary.TotalEvidence,
+		report.Summary.TotalSessions,
+		report.Summary.EligibleCoPresence,
+		report.Summary.EligibleDailyPresence,
+		report.Summary.EligibleReliabilityVerification,
+		report.Summary.NoEligibleSignals,
+	); err != nil {
+		return err
+	}
+	for _, reason := range report.Summary.ReasonCounts {
+		if _, err := fmt.Fprintf(
+			cmd.OutOrStdout(),
+			"reason code=%s count=%d\n",
+			reason.Code,
+			reason.Count,
+		); err != nil {
+			return err
+		}
+	}
+	for _, evidence := range report.Evidence {
+		if _, err := fmt.Fprintf(
+			cmd.OutOrStdout(),
+			"evidence evidence_id=%s event_id=%s identity_present=%t identity_ref=%s facility_id=%s zone_id=%s node_id=%s direction=%s source_result=%s accepted_presence=%t acceptance_path=%s projection_reason=%s session_state=%s co_presence=%t daily_presence=%t reliability=%t reasons=%s observed_at=%s\n",
+			evidence.EvidenceID,
+			evidence.EventID,
+			evidence.IdentityPresent,
+			evidence.IdentityRef,
+			evidence.FacilityID,
+			evidence.ZoneID,
+			evidence.NodeID,
+			evidence.Direction,
+			evidence.SourceResult,
+			evidence.AcceptedPresence,
+			evidence.AcceptancePath,
+			evidence.ProjectionReason,
+			evidence.SessionState,
+			evidence.Eligibility.CoPresenceProof.Eligible,
+			evidence.Eligibility.PrivateDailyPresence.Eligible,
+			evidence.Eligibility.ReliabilityVerification.Eligible,
+			strings.Join(evidence.ReasonCodes, ","),
+			formatOptionalTime(evidence.ObservedAt),
+		); err != nil {
+			return err
+		}
+	}
+	for _, session := range report.Sessions {
+		if _, err := fmt.Fprintf(
+			cmd.OutOrStdout(),
+			"session session_id=%s identity_present=%t identity_ref=%s state=%s entry_event_id=%s exit_event_id=%s co_presence=%t daily_presence=%t reliability=%t reasons=%s entry_at=%s exit_at=%s duration_seconds=%s\n",
+			session.SessionID,
+			session.IdentityPresent,
+			session.IdentityRef,
+			session.State,
+			session.EntryEventID,
+			session.ExitEventID,
+			session.Eligibility.CoPresenceProof.Eligible,
+			session.Eligibility.PrivateDailyPresence.Eligible,
+			session.Eligibility.ReliabilityVerification.Eligible,
+			strings.Join(session.ReasonCodes, ","),
+			formatOptionalTime(session.EntryAt),
+			formatOptionalTime(session.ExitAt),
+			formatOptionalInt64(session.DurationSeconds),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildReadPath(cfg config.Config) (*presence.ReadPath, string, error) {
