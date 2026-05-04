@@ -106,6 +106,53 @@ Expected result:
 - the output does not contain resolved names
 - the output does not contain `external_identity_hash`
 
+## Internal Ingress Bridge Proof
+
+Use the repo/local CLI proof when a later APOLLO packet needs to know which
+ATHENA facts are eligible for future co-presence, private daily presence, or
+reliability verification work:
+
+```bash
+cd /Users/zizo/Personal-Projects/ASHTON/athena
+
+go run ./cmd/athena edge ingress-bridge \
+  --postgres-dsn "$ATHENA_EDGE_POSTGRES_DSN" \
+  --facility ashtonbee \
+  --zone gym-floor \
+  --since 2026-04-09T11:00:00Z \
+  --until 2026-04-09T13:00:00Z \
+  --format json
+```
+
+Text output is also available:
+
+```bash
+go run ./cmd/athena edge ingress-bridge \
+  --postgres-dsn "$ATHENA_EDGE_POSTGRES_DSN" \
+  --facility ashtonbee \
+  --since 2026-04-09T11:00:00Z \
+  --until 2026-04-09T13:00:00Z \
+  --format text
+```
+
+Expected result:
+
+- source `pass` / `fail` remains explicit and immutable
+- policy-backed accepted presence appears as separate accepted truth, not as a
+  rewritten source `pass`
+- source-pass `edge_sessions` remain separate from accepted-presence truth
+- accepted-presence session cutover is not claimed
+- anonymous or missing identity, unknown identity when a known set is supplied
+  by a caller, source fail without acceptance, stale, duplicate, out-of-order,
+  missing facility, missing timestamp, incomplete lifecycle, and
+  accepted-presence-without-source-pass-session cases carry explicit reason
+  codes
+- JSON/text output redacts raw account IDs, names, and external identity hashes
+
+This is an internal CLI proof over existing ATHENA Postgres facts. It does not
+create APOLLO visits, XP, teams, reliability scores, public/member routes,
+frontend UI, schema/proto changes, or deployed truth.
+
 ## Browser Fixture
 
 Use these files before the facility reopens:
@@ -287,8 +334,12 @@ Current behavior:
   `ATHENA_EDGE_OCCUPANCY_PROJECTION=true`
 - `fail` rows are accepted as observations and logged, but are not published to
   the current NATS visit-lifecycle subjects
-- authorized rows can also be shadow-written into the durable history file when
-  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set
+- authorized rows can also be written into the Postgres durable observation
+  store when `ATHENA_EDGE_POSTGRES_DSN` is set, with the older
+  `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` retained only as a local fallback
+- `athena edge ingress-bridge` can classify existing Postgres observation,
+  accepted-presence, projection, and source-pass session facts for future
+  APOLLO trust gates without mutating APOLLO truth
 - the durable record keeps `external_identity_hash`, not the raw account
   number, and stores only `name_present`, not the resolved name text or
   free-text `status_message`
@@ -320,6 +371,7 @@ Admin-facing note:
 ## Required Checks
 
 - `go test ./...`
+- `go test -count=1 ./internal/edgehistory ./cmd/athena`
 - `go test -count=1 ./internal/edge ./internal/edgehistory ./cmd/athena`
 - `go test -count=5 ./internal/config ./internal/edge ./internal/touchnet`
 - `go test -count=5 ./internal/presence ./internal/publish ./internal/server ./cmd/athena`
@@ -370,6 +422,9 @@ Use the hardening smoke sequence below when you need a closure-level recheck:
 - append-only durable history is activated only when
   `ATHENA_EDGE_OBSERVATION_HISTORY_PATH` is set
 - APOLLO consumers remain unchanged
+- `athena edge ingress-bridge` is CLI/internal-only; it does not create a
+  public API, frontend/operator UI, schema/proto change, XP ledger, team
+  behavior, or reliability scoring
 - bounded live deployment truth is now proven for one facility and one node
   token, but the durable history branch is still local/runtime proof rather than
   bounded live deployment proof
