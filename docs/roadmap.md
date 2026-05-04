@@ -41,6 +41,12 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
   CLI-first proof that classifies observation, accepted-presence, projection,
   and source-pass session facts for future co-presence, private daily presence,
   and reliability gates
+- platform Packet 8 Live Destructive Probe Plan is now closed as docs/runbook
+  truth only: future ATHENA tap rejection/acceptance, restart/reload, and
+  in-flight SIGTERM proof has fixture gates, abort criteria, evidence ledger,
+  rollback expectations, and command skeletons, but no live ATHENA destructive
+  probe, rollout restart, pod kill, DB write, runtime change, or deployed-truth
+  change happened
 - owner CLI policy and identity commands are now real in repo/runtime
 - bounded live in-cluster arrival proof is real through Milestone 1.5
 - bounded live browser-reachable ATHENA edge ingress and occupancy proof is now
@@ -105,6 +111,9 @@ ATHENA hardening work.
 - the real ingress bridge proof stays CLI-first and repo/local runtime only; it
   does not claim live DB proof, deployed truth, schema/proto changes, public
   routes, XP, teams, or reliability scoring
+- the live destructive probe plan stays platform docs/runbook truth only until
+  a separate operator-approved execution gate names disposable facility, node,
+  and account fixtures plus concrete rollback/replay proof
 - policy and identity management stay internal CLI-only in this line; there is
   still no HTTP admin surface
 - the bounded live deployment uses one facility, one node token, a private GHCR
