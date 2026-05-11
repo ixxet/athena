@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -52,7 +53,11 @@ type facilityListResponse struct {
 	Facilities []facility.Summary `json:"facilities"`
 }
 
-const internalReadTokenHeader = "X-Ashton-Internal-Read-Token"
+const (
+	internalReadTokenHeader          = "X-Ashton-Internal-Read-Token"
+	ingressBridgeDefaultSessionLimit = 50
+	ingressBridgeMaxSessionLimit     = 250
+)
 
 type Option func(*handlerOptions)
 
@@ -294,6 +299,8 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 	})
 
 	router.Get("/api/v1/presence/ingress-bridge", func(w http.ResponseWriter, r *http.Request) {
+		setNoStoreHeaders(w)
+
 		if options.ingressBridgeReader == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "edge ingress bridge is not configured",
@@ -348,7 +355,7 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			return
 		}
 
-		sessionLimit, err := parseOptionalNonNegativeInt(r.URL.Query().Get("session_limit"), "session_limit", 50)
+		sessionLimit, err := parseOptionalBoundedPositiveInt(r.URL.Query().Get("session_limit"), "session_limit", ingressBridgeDefaultSessionLimit, ingressBridgeMaxSessionLimit)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": err.Error(),
@@ -428,6 +435,12 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+func setNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
 func parseHistoryBoundary(value, field string) (time.Time, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -476,12 +489,34 @@ func parseOptionalNonNegativeInt(value, field string, fallback int) (int, error)
 	return parsed, nil
 }
 
+func parseOptionalBoundedPositiveInt(value, field string, fallback int, max int) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, &historyQueryError{message: field + " query parameter must be an integer"}
+	}
+	if parsed <= 0 {
+		return 0, &historyQueryError{message: field + " query parameter must be greater than 0"}
+	}
+	if parsed > max {
+		return 0, &historyQueryError{message: field + " query parameter must be less than or equal to " + strconv.Itoa(max)}
+	}
+
+	return parsed, nil
+}
+
 func authorizeInternalRead(r *http.Request, expectedToken string) (int, bool) {
 	token := strings.TrimSpace(r.Header.Get(internalReadTokenHeader))
 	if token == "" {
 		return http.StatusUnauthorized, false
 	}
-	if subtle.ConstantTimeCompare([]byte(token), []byte(strings.TrimSpace(expectedToken))) != 1 {
+	tokenHash := sha256.Sum256([]byte(token))
+	expectedHash := sha256.Sum256([]byte(strings.TrimSpace(expectedToken)))
+	if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) != 1 {
 		return http.StatusForbidden, false
 	}
 	return http.StatusOK, true
