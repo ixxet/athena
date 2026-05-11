@@ -501,6 +501,7 @@ func TestPresenceIngressBridgeEndpointRejectsMissingOrInvalidToken(t *testing.T)
 	}{
 		{name: "missing", status: http.StatusUnauthorized},
 		{name: "invalid", token: "wrong-token", status: http.StatusForbidden},
+		{name: "invalid different length", token: "wrong", status: http.StatusForbidden},
 	}
 
 	for _, testCase := range testCases {
@@ -514,6 +515,9 @@ func TestPresenceIngressBridgeEndpointRejectsMissingOrInvalidToken(t *testing.T)
 
 			if recorder.Code != testCase.status {
 				t.Fatalf("status = %d, want %d", recorder.Code, testCase.status)
+			}
+			if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+				t.Fatalf("Cache-Control = %q, want no-store", got)
 			}
 		})
 	}
@@ -566,6 +570,15 @@ func TestPresenceIngressBridgeEndpointReturnsAuthorizedRedactedReport(t *testing
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if got := recorder.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("Pragma = %q, want no-cache", got)
+	}
+	if got := recorder.Header().Get("Expires"); got != "0" {
+		t.Fatalf("Expires = %q, want 0", got)
+	}
 	if reader.filter.FacilityID != "ashtonbee" || reader.filter.ZoneID != "gym-floor" || reader.filter.NodeID != "entry-node" || reader.filter.SessionLimit != 7 {
 		t.Fatalf("filter = %+v, want scoped ingress bridge filter", reader.filter)
 	}
@@ -595,6 +608,8 @@ func TestPresenceIngressBridgeEndpointRejectsInvalidQueries(t *testing.T) {
 		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T13:00:00Z&until=2026-04-09T11:00:00Z",
 		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T14:00:01Z",
 		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=-1",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=0",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=251",
 	}
 
 	for _, target := range testCases {
