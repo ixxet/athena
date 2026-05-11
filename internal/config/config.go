@@ -24,6 +24,7 @@ type Config struct {
 	EdgeObservationHistoryPath       string
 	EdgePostgresDSN                  string
 	EdgeAnalyticsMaxWindow           time.Duration
+	InternalReadToken                string
 	FacilityCatalogPath              string
 	DefaultFacilityID                string
 	DefaultZoneID                    string
@@ -90,6 +91,7 @@ func Load() (Config, error) {
 		EdgeObservationHistoryPath:       getEnv("ATHENA_EDGE_OBSERVATION_HISTORY_PATH", ""),
 		EdgePostgresDSN:                  getEnv("ATHENA_EDGE_POSTGRES_DSN", ""),
 		EdgeAnalyticsMaxWindow:           analyticsMaxWindow,
+		InternalReadToken:                getEnv("ATHENA_INTERNAL_READ_TOKEN", ""),
 		FacilityCatalogPath:              getEnv("ATHENA_FACILITY_CATALOG_PATH", ""),
 		DefaultFacilityID:                getEnv("ATHENA_DEFAULT_FACILITY_ID", "ashtonbee"),
 		DefaultZoneID:                    getEnv("ATHENA_DEFAULT_ZONE_ID", ""),

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -51,14 +52,18 @@ type facilityListResponse struct {
 	Facilities []facility.Summary `json:"facilities"`
 }
 
+const internalReadTokenHeader = "X-Ashton-Internal-Read-Token"
+
 type Option func(*handlerOptions)
 
 type handlerOptions struct {
-	edgeTapHandler     http.Handler
-	historyReader      edgehistory.PublicObservationReader
-	analyticsReader    edgehistory.AnalyticsReader
-	analyticsMaxWindow time.Duration
-	facilityStore      *facility.Store
+	edgeTapHandler      http.Handler
+	historyReader       edgehistory.PublicObservationReader
+	analyticsReader     edgehistory.AnalyticsReader
+	ingressBridgeReader edgehistory.IngressBridgeReader
+	analyticsMaxWindow  time.Duration
+	internalReadToken   string
+	facilityStore       *facility.Store
 }
 
 func WithEdgeTapHandler(handler http.Handler) Option {
@@ -79,9 +84,21 @@ func WithAnalyticsReader(reader edgehistory.AnalyticsReader) Option {
 	}
 }
 
+func WithIngressBridgeReader(reader edgehistory.IngressBridgeReader) Option {
+	return func(options *handlerOptions) {
+		options.ingressBridgeReader = reader
+	}
+}
+
 func WithAnalyticsMaxWindow(limit time.Duration) Option {
 	return func(options *handlerOptions) {
 		options.analyticsMaxWindow = limit
+	}
+}
+
+func WithInternalReadToken(token string) Option {
+	return func(options *handlerOptions) {
+		options.internalReadToken = strings.TrimSpace(token)
 	}
 }
 
@@ -276,6 +293,87 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 		writeJSON(w, http.StatusOK, report)
 	})
 
+	router.Get("/api/v1/presence/ingress-bridge", func(w http.ResponseWriter, r *http.Request) {
+		if options.ingressBridgeReader == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "edge ingress bridge is not configured",
+			})
+			return
+		}
+		if strings.TrimSpace(options.internalReadToken) == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "edge ingress bridge internal read auth is not configured",
+			})
+			return
+		}
+		if status, ok := authorizeInternalRead(r, options.internalReadToken); !ok {
+			writeJSON(w, status, map[string]string{
+				"error": "internal read token is required",
+			})
+			return
+		}
+
+		facilityID := strings.TrimSpace(r.URL.Query().Get("facility"))
+		if facilityID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "facility query parameter is required",
+			})
+			return
+		}
+
+		since, err := parseHistoryBoundary(r.URL.Query().Get("since"), "since")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		until, err := parseHistoryBoundary(r.URL.Query().Get("until"), "until")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		if until.Before(since) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "until query parameter must be greater than or equal to since",
+			})
+			return
+		}
+		if options.analyticsMaxWindow > 0 && until.Sub(since) > options.analyticsMaxWindow {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "requested ingress bridge window exceeds configured maximum",
+			})
+			return
+		}
+
+		sessionLimit, err := parseOptionalNonNegativeInt(r.URL.Query().Get("session_limit"), "session_limit", 50)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		report, err := options.ingressBridgeReader.ReadIngressBridge(r.Context(), edgehistory.IngressBridgeFilter{
+			FacilityID:   facilityID,
+			ZoneID:       strings.TrimSpace(r.URL.Query().Get("zone")),
+			NodeID:       strings.TrimSpace(r.URL.Query().Get("node")),
+			Since:        since,
+			Until:        until,
+			SessionLimit: sessionLimit,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, report)
+	})
+
 	router.Get("/api/v1/facilities", func(w http.ResponseWriter, r *http.Request) {
 		if options.facilityStore == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -359,6 +457,34 @@ func parseOptionalPositiveInt(value, field string) (int, error) {
 	}
 
 	return parsed, nil
+}
+
+func parseOptionalNonNegativeInt(value, field string, fallback int) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, &historyQueryError{message: field + " query parameter must be an integer"}
+	}
+	if parsed < 0 {
+		return 0, &historyQueryError{message: field + " query parameter must be greater than or equal to 0"}
+	}
+
+	return parsed, nil
+}
+
+func authorizeInternalRead(r *http.Request, expectedToken string) (int, bool) {
+	token := strings.TrimSpace(r.Header.Get(internalReadTokenHeader))
+	if token == "" {
+		return http.StatusUnauthorized, false
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(strings.TrimSpace(expectedToken))) != 1 {
+		return http.StatusForbidden, false
+	}
+	return http.StatusOK, true
 }
 
 type historyQueryError struct {

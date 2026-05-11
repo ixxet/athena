@@ -42,6 +42,10 @@ type AnalyticsReader interface {
 	ReadAnalytics(context.Context, AnalyticsFilter) (AnalyticsReport, error)
 }
 
+type IngressBridgeReader interface {
+	ReadIngressBridge(context.Context, IngressBridgeFilter) (IngressBridgeReport, error)
+}
+
 func (s *FileStore) ReadAll(ctx context.Context) ([]edge.ObservationRecord, error) {
 	select {
 	case <-ctx.Done():

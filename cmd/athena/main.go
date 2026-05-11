@@ -46,16 +46,17 @@ type app struct {
 }
 
 type edgeRuntime struct {
-	backend            string
-	recorder           edgeingress.ObservationRecorder
-	acceptanceRecorder edgeingress.AcceptedPresenceRecorder
-	policyEvaluator    edgeingress.PolicyEvaluator
-	markerReader       edgehistory.MarkerReader
-	replayReader       edgehistory.ReplayReader
-	historyReader      edgehistory.PublicObservationReader
-	recentReader       edgehistory.RecentObservationReader
-	analyticsReader    edgehistory.AnalyticsReader
-	close              func()
+	backend             string
+	recorder            edgeingress.ObservationRecorder
+	acceptanceRecorder  edgeingress.AcceptedPresenceRecorder
+	policyEvaluator     edgeingress.PolicyEvaluator
+	markerReader        edgehistory.MarkerReader
+	replayReader        edgehistory.ReplayReader
+	historyReader       edgehistory.PublicObservationReader
+	recentReader        edgehistory.RecentObservationReader
+	analyticsReader     edgehistory.AnalyticsReader
+	ingressBridgeReader edgehistory.IngressBridgeReader
+	close               func()
 }
 
 var newPublisherHandle = func(cfg config.Config) (publish.Publisher, func() error, error) {
@@ -271,6 +272,11 @@ func newServeCmd() *cobra.Command {
 			}
 			if edgeStores.analyticsReader != nil {
 				handlerOpts = append(handlerOpts, server.WithAnalyticsReader(edgeStores.analyticsReader))
+				handlerOpts = append(handlerOpts, server.WithAnalyticsMaxWindow(cfg.EdgeAnalyticsMaxWindow))
+			}
+			if edgeStores.ingressBridgeReader != nil {
+				handlerOpts = append(handlerOpts, server.WithIngressBridgeReader(edgeStores.ingressBridgeReader))
+				handlerOpts = append(handlerOpts, server.WithInternalReadToken(cfg.InternalReadToken))
 				handlerOpts = append(handlerOpts, server.WithAnalyticsMaxWindow(cfg.EdgeAnalyticsMaxWindow))
 			}
 			if facilityStore != nil {
@@ -1558,16 +1564,17 @@ func openEdgeRuntime(ctx context.Context, cfg config.Config) (edgeRuntime, error
 			return edgeRuntime{}, err
 		}
 		return edgeRuntime{
-			backend:            "postgres",
-			recorder:           store,
-			acceptanceRecorder: store,
-			policyEvaluator:    store,
-			markerReader:       store,
-			replayReader:       store,
-			historyReader:      store,
-			recentReader:       store,
-			analyticsReader:    store,
-			close:              store.Close,
+			backend:             "postgres",
+			recorder:            store,
+			acceptanceRecorder:  store,
+			policyEvaluator:     store,
+			markerReader:        store,
+			replayReader:        store,
+			historyReader:       store,
+			recentReader:        store,
+			analyticsReader:     store,
+			ingressBridgeReader: store,
+			close:               store.Close,
 		}, nil
 	case strings.TrimSpace(cfg.EdgeObservationHistoryPath) != "":
 		store, err := edgehistory.NewFileStore(cfg.EdgeObservationHistoryPath)
