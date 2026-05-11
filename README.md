@@ -11,8 +11,9 @@ publication path that other repos depend on.
 > derived session facts, compact durable identity markers for projector misses,
 > accepted-presence truth backed by facility-local identity subjects, policy
 > versions, and acceptance records in the current `v0.8.x` repo/runtime line,
-> bounded internal analytics reads, CLI-first real ingress bridge proof for
-> future APOLLO trust gates, bounded retry/backoff publication with bounded
+> bounded internal analytics reads, CLI-first and token-gated internal HTTP
+> real ingress bridge proof for future APOLLO trust gates, bounded retry/backoff
+> publication with bounded
 > process-local dedupe, bounded live browser-reachable deployment of the
 > `v0.8.2` policy-backed accepted-presence hardening line, and shared
 > `ashton-proto` runtime contracts for arrival and departure events.
@@ -79,6 +80,7 @@ flowchart LR
 | HTTP edge tap ingress | `POST /api/v1/edge/tap` | Real when edge ingress is configured | Validates per-node tokens, hashes raw IDs, writes privacy-safe append-only observations when `ATHENA_EDGE_POSTGRES_DSN` is set, normalizes fail reasons, and can add separate policy-backed accepted presence without rewriting source `fail` truth |
 | HTTP history read | `GET /api/v1/presence/history` | Real, bounded internal support | Reads privacy-safe facility-filtered history from the configured durable store and returns `direction`, source `result`, `observed_at`, `committed`, and separate accepted-presence fields |
 | HTTP analytics read | `GET /api/v1/presence/analytics` | Real, bounded internal support | Reads Postgres-backed observation and session analytics by facility, zone, node, and time window; stays internal and bounded instead of widening into dashboards |
+| HTTP ingress bridge read | `GET /api/v1/presence/ingress-bridge` | Real, repo/runtime, internal-token-gated | Reads the same Postgres-backed bridge report as the CLI for APOLLO's internal presence gate; requires `ATHENA_INTERNAL_READ_TOKEN` via `X-Ashton-Internal-Read-Token` and remains undeployed/publicly unexposed |
 | HTTP facility catalog | `GET /api/v1/facilities` | Real, internal-only, config-gated | Reads facility summaries from `ATHENA_FACILITY_CATALOG_PATH`; returns `facility_id`, `name`, and `timezone` only |
 | HTTP facility detail | `GET /api/v1/facilities/{facility_id}` | Real, internal-only, config-gated | Reads one facility's hours, zones, closure windows, and bounded metadata from the same validated catalog file |
 | Prometheus metrics | `GET /metrics` | Real | Exposes `athena_current_occupancy` from the same default read path as HTTP |
@@ -116,7 +118,7 @@ flowchart LR
 | Durable projector miss guardrail | Compact Postgres or file-backed identity markers keyed by facility, zone, and hashed identity | Real, explicit, repo/runtime | `v0.7.2` | Rejects older or duplicate pass events after absent-state eviction without turning markers into a second occupancy authority |
 | Derived session analytics | Postgres-backed `edge_sessions` read model plus bounded internal HTTP/CLI reads | Real, internal-only | later than `v0.6.1` | Derives `open`, `closed`, and `unmatched_exit` session facts from accepted `pass` observations without rewriting the original observation history |
 | Policy-backed accepted presence | Postgres identity subjects/links, policy versions, acceptance records, and owner CLI | Real, explicit, repo/runtime, internal-only | `v0.8.x` | Keeps source `fail` truth immutable while allowing explicit accepted-presence truth for recognized-denied testing windows |
-| Real ingress bridge proof | Postgres-backed CLI report over observations, acceptances, projection replay, and source-pass sessions | Real, repo/local runtime, internal-only | `v0.8.x` | Produces JSON/text eligibility evidence for later APOLLO co-presence, private daily presence, and reliability work while keeping source truth, accepted truth, and session truth separate |
+| Real ingress bridge proof | Postgres-backed CLI report and token-gated internal HTTP read over observations, acceptances, projection replay, and source-pass sessions | Real, repo/local runtime, internal-only | `v0.8.x` | Produces JSON/text eligibility evidence for later APOLLO co-presence, private daily presence, and reliability work while keeping source truth, accepted truth, and session truth separate; HTTP proof is not deployed exposure |
 | Legacy file-backed history | Append-only file journal plus replay helper | Still available, explicit fallback | `v0.5.0` | Keeps the older local/runtime durable-history path available when Postgres is not configured, but it is no longer the primary storage line for this repo/runtime slice |
 | Container build | Docker multi-stage build | Instituted | `v0.2.x` -> `v0.3.x` | Image build path is real |
 | CI | GitHub Actions image workflow | Instituted | `v0.2.x` -> `v0.3.x` | Build and image workflow exist in repo |
@@ -217,8 +219,9 @@ The current durable groundwork is intentionally narrow:
 
 - the read surface is still CLI/internal-only through `athena edge history`,
   `athena edge analytics`, `athena edge ingress-bridge`, `athena policy ...`,
-  `athena identity ...`, one bounded internal HTTP facility-history read, and
-  one bounded internal HTTP analytics read
+  `athena identity ...`, one bounded internal HTTP facility-history read, one
+  bounded internal HTTP analytics read, and one token-gated internal HTTP
+  ingress-bridge read
 - restart/reload now rebuilds occupancy from accepted-presence truth, which
   includes committed `pass` observations and explicit policy-backed accepted
   fails
@@ -322,9 +325,10 @@ lives at [`docs/edge-observation-history-plan.md`](docs/edge-observation-history
 - durable edge history and session analytics stay internal-only through bounded
   CLI/internal HTTP reads; there is still no public or identity-level operator
   HTTP surface for that history
-- the ingress bridge proof is CLI-only and local/runtime; it does not add a
-  public/member route, a frontend surface, schema/proto changes, APOLLO
-  mutation, XP, teams, or reliability scores
+- the ingress bridge proof is CLI-first and now has a token-gated internal HTTP
+  read for APOLLO's runtime gate; this is repo/runtime proof only and does not
+  add deployed exposure, a public/member route, a frontend surface,
+  schema/proto changes, APOLLO mutation, XP, teams, or reliability scores
 - policy and identity management are CLI-only in this line; there is still no
   HTTP admin surface
 - accepted presence and session truth are staged separately on purpose; current

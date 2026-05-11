@@ -153,6 +153,33 @@ This is an internal CLI proof over existing ATHENA Postgres facts. It does not
 create APOLLO visits, XP, teams, reliability scores, public/member routes,
 frontend UI, schema/proto changes, or deployed truth.
 
+The same bridge report is available as a repo/runtime internal HTTP read when
+ATHENA is started with Postgres-backed edge history and a bridge read token:
+
+```bash
+ATHENA_EDGE_POSTGRES_DSN="$ATHENA_EDGE_POSTGRES_DSN" \
+ATHENA_INTERNAL_READ_TOKEN="$ATHENA_INTERNAL_READ_TOKEN" \
+go run ./cmd/athena serve
+```
+
+```bash
+curl -sS \
+  -H "X-Ashton-Internal-Read-Token: $ATHENA_INTERNAL_READ_TOKEN" \
+  'http://127.0.0.1:18090/api/v1/presence/ingress-bridge?facility=ashtonbee&zone=gym-floor&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=50'
+```
+
+Expected HTTP auth behavior:
+
+- missing `X-Ashton-Internal-Read-Token` returns `401`
+- an invalid token returns `403`
+- if `ATHENA_INTERNAL_READ_TOKEN` is not configured, the endpoint returns
+  `503` and does not serve an unauthenticated bridge report
+- successful output remains the same redacted bridge JSON shape as the CLI
+
+This HTTP read is repo/runtime auth proof only. It is not deployed exposure,
+does not change proxy/GitOps, and must not be exposed publicly without a
+separate deploy/live-smoke gate.
+
 ## Browser Fixture
 
 Use these files before the facility reopens:
