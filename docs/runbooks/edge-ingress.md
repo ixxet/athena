@@ -174,6 +174,11 @@ Expected HTTP auth behavior:
 - an invalid token returns `403`
 - if `ATHENA_INTERNAL_READ_TOKEN` is not configured, the endpoint returns
   `503` and does not serve an unauthenticated bridge report
+- token comparison is fixed-length before the constant-time compare
+- all bridge HTTP responses set `Cache-Control: no-store`,
+  `Pragma: no-cache`, and `Expires: 0`
+- omitted `session_limit` defaults to `50`; explicit HTTP `session_limit`
+  values must be between `1` and `250`
 - successful output remains the same redacted bridge JSON shape as the CLI
 
 This HTTP read is repo/runtime auth proof only. It is not deployed exposure,

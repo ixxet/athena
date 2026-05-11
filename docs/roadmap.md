@@ -41,7 +41,8 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
   `GET /api/v1/presence/ingress-bridge` read are now real in repo/local
   runtime as bridge proof that classifies observation, accepted-presence,
   projection, and source-pass session facts for future co-presence, private
-  daily presence, and reliability gates
+  daily presence, and reliability gates. The HTTP read uses fixed-length token
+  comparison, no-store/no-cache headers, and bounded `session_limit` values.
 - platform Packet 8 Live Destructive Probe Plan is now closed as docs/runbook
   truth only: future ATHENA tap rejection/acceptance, restart/reload, and
   in-flight SIGTERM proof has fixture gates, abort criteria, evidence ledger,
@@ -67,7 +68,7 @@ bounded Tracer 17 support follow-up on that same durable-history branch.
 | `v0.6.0` | facility catalog, hours, zones, closure windows, and per-facility metadata reads over validated internal catalog files | keep the read surfaces config-gated, internal/CLI, and subordinate to ATHENA-owned truth | do not widen into social logic or broad product UX |
 | `v0.6.1` | Milestone 2.0 hardening follow-up for shutdown and publish resilience | keep the line patch-only and non-widening | do not claim durable-history deployment, Postgres ingress storage, or prediction |
 | `v0.7.0` | Postgres-backed append-only observations, derived session facts, and bounded internal analytics reads | keep the new surfaces internal/CLI-first, keep fail-open durable writes explicit, and preserve ATHENA as the physical-truth ingest boundary | do not widen into booking, public dashboards, AI summaries, alias auto-merge, or prediction |
-| `v0.8.x` | policy-backed accepted-presence testing line plus CLI-first and token-gated internal HTTP real ingress bridge proof | keep source `fail` truth immutable, require explicit policy versions, enforce privacy-safe links, keep policy/identity management internal CLI-only, keep bridge output internal/local, require `ATHENA_INTERNAL_READ_TOKEN` for the bridge HTTP read, and keep the existing tap contract unchanged | do not widen into session cutover, operator UI, public reports, alias UX, XP, teams, reliability scoring, deployed exposure, or prediction |
+| `v0.8.x` | policy-backed accepted-presence testing line plus CLI-first and token-gated internal HTTP real ingress bridge proof | keep source `fail` truth immutable, require explicit policy versions, enforce privacy-safe links, keep policy/identity management internal CLI-only, keep bridge output internal/local, require `ATHENA_INTERNAL_READ_TOKEN` for the bridge HTTP read, keep no-store responses and bounded session limits, and keep the existing tap contract unchanged | do not widen into session cutover, operator UI, public reports, alias UX, XP, teams, reliability scoring, deployed exposure, or prediction |
 | later than `v0.8.x` | accepted-presence session cutover, broader diagnostics, and capacity prediction runtime | build on stable ingress, trusted durable history, explicit accepted presence, and clean facility truth first | do not ship dashboards, public reports, or predictive UX before the accepted-presence truth model is stable |
 
 ## Next Ladder Role
@@ -111,8 +112,9 @@ ATHENA hardening work.
   derivation stays source-pass-only in `v0.8.x`
 - the real ingress bridge proof stays CLI/API-first and repo/local runtime
   only; its HTTP read is token-gated with `ATHENA_INTERNAL_READ_TOKEN` and
-  `X-Ashton-Internal-Read-Token`, and it does not claim live DB proof, deployed
-  truth, schema/proto changes, public routes, XP, teams, or reliability scoring
+  `X-Ashton-Internal-Read-Token`, returns no-store/no-cache headers, bounds
+  `session_limit`, and does not claim live DB proof, deployed truth,
+  schema/proto changes, public routes, XP, teams, or reliability scoring
 - the live destructive probe plan stays platform docs/runbook truth only until
   a separate operator-approved execution gate names disposable facility, node,
   and account fixtures plus concrete rollback/replay proof
