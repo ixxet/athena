@@ -68,6 +68,18 @@ func TestLoadRejectsInvalidEdgeAnalyticsMaxWindow(t *testing.T) {
 	}
 }
 
+func TestLoadReadsInternalReadToken(t *testing.T) {
+	t.Setenv("ATHENA_INTERNAL_READ_TOKEN", "bridge-token")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.InternalReadToken != "bridge-token" {
+		t.Fatalf("InternalReadToken = %q, want bridge-token", cfg.InternalReadToken)
+	}
+}
+
 func TestLoadDefaultsProjectorBounds(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {

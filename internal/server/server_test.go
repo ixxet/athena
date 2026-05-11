@@ -28,6 +28,12 @@ type serverStubAnalyticsReader struct {
 	err    error
 }
 
+type serverStubIngressBridgeReader struct {
+	report edgehistory.IngressBridgeReport
+	filter edgehistory.IngressBridgeFilter
+	err    error
+}
+
 func (s *serverStubPublisher) Publish(_ context.Context, subject string, payload []byte) error {
 	s.subjects = append(s.subjects, subject)
 	s.payloads = append(s.payloads, payload)
@@ -35,6 +41,11 @@ func (s *serverStubPublisher) Publish(_ context.Context, subject string, payload
 }
 
 func (s *serverStubAnalyticsReader) ReadAnalytics(_ context.Context, _ edgehistory.AnalyticsFilter) (edgehistory.AnalyticsReport, error) {
+	return s.report, s.err
+}
+
+func (s *serverStubIngressBridgeReader) ReadIngressBridge(_ context.Context, filter edgehistory.IngressBridgeFilter) (edgehistory.IngressBridgeReport, error) {
+	s.filter = filter
 	return s.report, s.err
 }
 
@@ -427,6 +438,168 @@ func TestPresenceAnalyticsEndpointRejectsInvalidQueries(t *testing.T) {
 
 	for _, target := range testCases {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("target %s status = %d, want %d", target, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestPresenceIngressBridgeEndpointRequiresConfiguredReader(t *testing.T) {
+	handler := testHandler(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z", nil)
+	request.Header.Set(internalReadTokenHeader, "bridge-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "ingress bridge is not configured") {
+		t.Fatalf("body = %q, want missing bridge error", recorder.Body.String())
+	}
+}
+
+func TestPresenceIngressBridgeEndpointRequiresInternalReadAuthConfig(t *testing.T) {
+	reader := &serverStubIngressBridgeReader{}
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithIngressBridgeReader(reader),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z", nil)
+	request.Header.Set(internalReadTokenHeader, "bridge-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "internal read auth is not configured") {
+		t.Fatalf("body = %q, want missing internal auth error", recorder.Body.String())
+	}
+}
+
+func TestPresenceIngressBridgeEndpointRejectsMissingOrInvalidToken(t *testing.T) {
+	reader := &serverStubIngressBridgeReader{}
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithIngressBridgeReader(reader),
+		WithInternalReadToken("bridge-token"),
+	)
+
+	testCases := []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{name: "missing", status: http.StatusUnauthorized},
+		{name: "invalid", token: "wrong-token", status: http.StatusForbidden},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z", nil)
+			if testCase.token != "" {
+				request.Header.Set(internalReadTokenHeader, testCase.token)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != testCase.status {
+				t.Fatalf("status = %d, want %d", recorder.Code, testCase.status)
+			}
+		})
+	}
+}
+
+func TestPresenceIngressBridgeEndpointReturnsAuthorizedRedactedReport(t *testing.T) {
+	base := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	observedAt := base.Add(-15 * time.Minute)
+	reader := &serverStubIngressBridgeReader{
+		report: edgehistory.IngressBridgeReport{
+			FacilityID: "ashtonbee",
+			ZoneID:     "gym-floor",
+			NodeID:     "entry-node",
+			Since:      base.Add(-time.Hour),
+			Until:      base,
+			Evidence: []edgehistory.IngressBridgeEvidence{{
+				EvidenceID:       "evidence-001",
+				EventID:          "edge-001",
+				IdentityPresent:  true,
+				IdentityRef:      "identity-001",
+				FacilityID:       "ashtonbee",
+				ZoneID:           "gym-floor",
+				NodeID:           "entry-node",
+				Direction:        domain.DirectionIn,
+				SourceResult:     "pass",
+				ObservedAt:       &observedAt,
+				SourceCommitted:  true,
+				AcceptedPresence: true,
+				Eligibility: edgehistory.IngressBridgeEligibility{
+					CoPresenceProof:      edgehistory.EligibilitySignal{Eligible: true},
+					PrivateDailyPresence: edgehistory.EligibilitySignal{Eligible: true},
+				},
+			}},
+		},
+	}
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithIngressBridgeReader(reader),
+		WithInternalReadToken("bridge-token"),
+		WithAnalyticsMaxWindow(24*time.Hour),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&zone=gym-floor&node=entry-node&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=7", nil)
+	request.Header.Set(internalReadTokenHeader, "bridge-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if reader.filter.FacilityID != "ashtonbee" || reader.filter.ZoneID != "gym-floor" || reader.filter.NodeID != "entry-node" || reader.filter.SessionLimit != 7 {
+		t.Fatalf("filter = %+v, want scoped ingress bridge filter", reader.filter)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "\"identity_ref\":\"identity-001\"") {
+		t.Fatalf("body = %q, want report-local identity ref", body)
+	}
+	if strings.Contains(body, "external_identity_hash") {
+		t.Fatalf("body leaked raw ATHENA identity field: %s", body)
+	}
+}
+
+func TestPresenceIngressBridgeEndpointRejectsInvalidQueries(t *testing.T) {
+	handler := NewHandler(
+		presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"}),
+		metrics.New(presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})),
+		"edge-projection",
+		WithIngressBridgeReader(&serverStubIngressBridgeReader{}),
+		WithInternalReadToken("bridge-token"),
+		WithAnalyticsMaxWindow(2*time.Hour),
+	)
+
+	testCases := []string{
+		"/api/v1/presence/ingress-bridge?since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=bad-time&until=2026-04-09T13:00:00Z",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T13:00:00Z&until=2026-04-09T11:00:00Z",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T14:00:01Z",
+		"/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-04-09T11:00:00Z&until=2026-04-09T13:00:00Z&session_limit=-1",
+	}
+
+	for _, target := range testCases {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set(internalReadTokenHeader, "bridge-token")
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
