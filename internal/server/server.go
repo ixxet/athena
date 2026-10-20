@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -363,7 +365,13 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			return
 		}
 
-		report, err := options.ingressBridgeReader.ReadIngressBridge(r.Context(), edgehistory.IngressBridgeFilter{
+		if until.Sub(since) > edgehistory.IngressBridgeMaxWindow {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ingress bridge window exceeds 24 hours"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), edgehistory.IngressBridgeTimeout)
+		defer cancel()
+		report, err := options.ingressBridgeReader.ReadIngressBridge(ctx, edgehistory.IngressBridgeFilter{
 			FacilityID:   facilityID,
 			ZoneID:       strings.TrimSpace(r.URL.Query().Get("zone")),
 			NodeID:       strings.TrimSpace(r.URL.Query().Get("node")),
@@ -372,13 +380,28 @@ func NewHandler(readPath *presence.ReadPath, collector *metrics.Metrics, adapter
 			SessionLimit: sessionLimit,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"error": err.Error(),
-			})
+			status := http.StatusInternalServerError
+			message := "ingress bridge read failed"
+			if errors.Is(err, edgehistory.ErrIngressBridgeBudget) {
+				status = http.StatusUnprocessableEntity
+				message = "ingress bridge budget exceeded; narrow the request"
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				status = http.StatusGatewayTimeout
+				message = "ingress bridge read canceled or timed out"
+			}
+			writeJSON(w, status, map[string]string{"error": message})
 			return
 		}
+		payload, err := json.Marshal(report)
+		if err != nil || len(payload)+1 > edgehistory.IngressBridgeMaxBytes {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "ingress bridge response budget exceeded"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(append(payload, '\n'))
 
-		writeJSON(w, http.StatusOK, report)
 	})
 
 	router.Get("/api/v1/facilities", func(w http.ResponseWriter, r *http.Request) {

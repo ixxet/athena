@@ -931,12 +931,6 @@ func newEdgeCmd() *cobra.Command {
 		Use:   "ingress-bridge",
 		Short: "Classify local edge ingress evidence for future APOLLO trust gates.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := newIngressBridgeStore(cmd.Context(), bridgePostgresDSN)
-			if err != nil {
-				return err
-			}
-			defer store.Close()
-
 			since, err := parseRFC3339Value(bridgeSince, "--since")
 			if err != nil {
 				return err
@@ -946,7 +940,23 @@ func newEdgeCmd() *cobra.Command {
 				return err
 			}
 
-			report, err := store.ReadIngressBridge(cmd.Context(), edgehistory.IngressBridgeFilter{
+			if until.Before(since) || until.Sub(since) > edgehistory.IngressBridgeMaxWindow {
+				return fmt.Errorf("bridge window must be ordered and at most 24 hours")
+			}
+			if bridgeSessionLimit < 1 || bridgeSessionLimit > edgehistory.IngressBridgeMaxSessions {
+				return fmt.Errorf("session-limit must be between 1 and 250")
+			}
+			if bridgeFormat != "json" && bridgeFormat != "text" {
+				return fmt.Errorf("unsupported format %q", bridgeFormat)
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), edgehistory.IngressBridgeTimeout)
+			defer cancel()
+			store, err := newIngressBridgeStore(ctx, bridgePostgresDSN)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			report, err := store.ReadIngressBridge(ctx, edgehistory.IngressBridgeFilter{
 				FacilityID:   bridgeFacilityID,
 				ZoneID:       bridgeZoneID,
 				NodeID:       bridgeNodeID,
@@ -960,9 +970,15 @@ func newEdgeCmd() *cobra.Command {
 
 			switch bridgeFormat {
 			case "json":
-				encoder := json.NewEncoder(cmd.OutOrStdout())
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(report)
+				payload, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return err
+				}
+				if len(payload)+1 > edgehistory.IngressBridgeMaxBytes {
+					return fmt.Errorf("%w: response bytes", edgehistory.ErrIngressBridgeBudget)
+				}
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), string(payload))
+				return err
 			case "text":
 				return writeIngressBridgeText(cmd, report)
 			default:
@@ -976,7 +992,7 @@ func newEdgeCmd() *cobra.Command {
 	bridgeCmd.Flags().StringVar(&bridgeNodeID, "node", "", "optional node id to query")
 	bridgeCmd.Flags().StringVar(&bridgeSince, "since", "", "inclusive RFC3339 lower bound")
 	bridgeCmd.Flags().StringVar(&bridgeUntil, "until", "", "inclusive RFC3339 upper bound")
-	bridgeCmd.Flags().IntVar(&bridgeSessionLimit, "session-limit", 50, "maximum number of source-pass session facts to print; 0 prints all")
+	bridgeCmd.Flags().IntVar(&bridgeSessionLimit, "session-limit", 50, "maximum complete source-pass session set (1-250); overflow is rejected")
 	bridgeCmd.Flags().StringVar(&bridgeFormat, "format", "text", "output format: text or json")
 	_ = bridgeCmd.MarkFlagRequired("facility")
 	_ = bridgeCmd.MarkFlagRequired("since")

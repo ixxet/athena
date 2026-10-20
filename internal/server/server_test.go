@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +19,55 @@ import (
 	"github.com/ixxet/athena/internal/metrics"
 	"github.com/ixxet/athena/internal/presence"
 )
+
+func TestPresenceIngressBridgeBudgetAndErrorBoundaries(t *testing.T) {
+	readPath := presence.NewReadPath(presence.NewProjector(), domain.OccupancyFilter{FacilityID: "ashtonbee"})
+	for _, test := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"overflow", edgehistory.ErrIngressBridgeBudget, http.StatusUnprocessableEntity},
+		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout},
+		{"canceled", context.Canceled, http.StatusGatewayTimeout},
+		{"redacted", errors.New("private-identity-or-token"), http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &serverStubIngressBridgeReader{err: test.err}
+			handler := NewHandler(readPath, metrics.New(readPath), "edge-projection", WithIngressBridgeReader(reader), WithInternalReadToken("read-token"))
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-10-20T10:00:00Z&until=2026-10-20T11:00:00Z", nil)
+			request.Header.Set(internalReadTokenHeader, "read-token")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.want || strings.Contains(response.Body.String(), "private-identity-or-token") {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("cache header=%q", response.Header().Get("Cache-Control"))
+			}
+		})
+	}
+	for _, extra := range []int{0, 1} {
+		report := edgehistory.IngressBridgeReport{}
+		base, _ := json.Marshal(report)
+		report.Contract.SourceTruth = strings.Repeat("x", edgehistory.IngressBridgeMaxBytes-len(base)-1+extra)
+		handler := NewHandler(readPath, metrics.New(readPath), "edge-projection", WithIngressBridgeReader(&serverStubIngressBridgeReader{report: report}), WithInternalReadToken("read-token"))
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/presence/ingress-bridge?facility=ashtonbee&since=2026-10-20T10:00:00Z&until=2026-10-20T11:00:00Z", nil)
+		request.Header.Set(internalReadTokenHeader, "read-token")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		want := http.StatusOK
+		if extra == 1 {
+			want = http.StatusUnprocessableEntity
+		}
+		if response.Code != want {
+			t.Fatalf("byte boundary %d status=%d", extra, response.Code)
+		}
+		if extra == 0 && response.Body.Len() != edgehistory.IngressBridgeMaxBytes {
+			t.Fatalf("exact bytes=%d", response.Body.Len())
+		}
+	}
+}
 
 type serverStubPublisher struct {
 	subjects []string

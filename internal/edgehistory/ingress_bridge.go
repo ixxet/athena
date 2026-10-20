@@ -2,10 +2,14 @@ package edgehistory
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ixxet/athena/internal/domain"
 	"github.com/ixxet/athena/internal/edge"
@@ -13,6 +17,14 @@ import (
 )
 
 const (
+	IngressBridgeMaxObservations                   = 1000
+	IngressBridgeMaxContext                        = 4000
+	IngressBridgeMaxSessions                       = 250
+	IngressBridgeMaxBytes                          = 2 << 20
+	IngressBridgeMaxWindow                         = 24 * time.Hour
+	IngressBridgeTimeout                           = 5 * time.Second
+	IngressBridgeVersion                           = "athena_ingress_bridge_v2"
+	ReasonIncompleteReplay                         = "incomplete_replay_context"
 	ReasonMissingIdentity                          = "missing_identity"
 	ReasonUnknownIdentity                          = "unknown_identity"
 	ReasonSourceFailWithoutAcceptedPresence        = "source_fail_without_accepted_presence"
@@ -29,6 +41,8 @@ const (
 	ReasonUnsupportedSourceResult                  = "unsupported_source_result"
 )
 
+var ErrIngressBridgeBudget = errors.New("ingress bridge budget exceeded")
+
 type IngressBridgeFilter struct {
 	FacilityID          string
 	ZoneID              string
@@ -40,18 +54,29 @@ type IngressBridgeFilter struct {
 }
 
 type IngressBridgeReport struct {
-	FacilityID string                  `json:"facility_id"`
-	ZoneID     string                  `json:"zone_id,omitempty"`
-	NodeID     string                  `json:"node_id,omitempty"`
-	Since      time.Time               `json:"since"`
-	Until      time.Time               `json:"until"`
-	Contract   IngressBridgeContract   `json:"contract"`
-	Summary    IngressBridgeSummary    `json:"summary"`
-	Evidence   []IngressBridgeEvidence `json:"evidence"`
-	Sessions   []IngressBridgeSession  `json:"sessions"`
+	FacilityID   string                    `json:"facility_id"`
+	ZoneID       string                    `json:"zone_id,omitempty"`
+	NodeID       string                    `json:"node_id,omitempty"`
+	Since        time.Time                 `json:"since"`
+	Until        time.Time                 `json:"until"`
+	Completeness IngressBridgeCompleteness `json:"completeness"`
+	Contract     IngressBridgeContract     `json:"contract"`
+	Summary      IngressBridgeSummary      `json:"summary"`
+	Evidence     []IngressBridgeEvidence   `json:"evidence"`
+	Sessions     []IngressBridgeSession    `json:"sessions"`
+}
+
+type IngressBridgeCompleteness struct {
+	Observations  bool     `json:"observations"`
+	Sessions      bool     `json:"sessions"`
+	ReplayContext bool     `json:"replay_context"`
+	ReasonCodes   []string `json:"reason_codes"`
 }
 
 type IngressBridgeContract struct {
+	Version               string `json:"version"`
+	ReplayOrder           string `json:"replay_order"`
+	IdentityScope         string `json:"identity_scope"`
 	Scope                 string `json:"scope"`
 	SourceTruth           string `json:"source_truth"`
 	AcceptedPresenceTruth string `json:"accepted_presence_truth"`
@@ -134,50 +159,117 @@ type sessionBridgeIndex struct {
 	byEventID map[string]analyticsSessionRow
 }
 
+// ReadIngressBridge uses one read-only snapshot and bounds every materialised set.
+// The context cap is deliberately conservative: retained history must fit in full.
 func (s *PostgresStore) ReadIngressBridge(ctx context.Context, filter IngressBridgeFilter) (IngressBridgeReport, error) {
 	normalized, err := normalizeIngressBridgeFilter(filter)
 	if err != nil {
 		return IngressBridgeReport{}, err
 	}
-
-	observations, err := s.readIngressBridgeObservations(ctx, normalized)
+	ctx, cancel := context.WithTimeout(ctx, IngressBridgeTimeout)
+	defer cancel()
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return IngressBridgeReport{}, err
 	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SET LOCAL statement_timeout = '4000ms'"); err != nil {
+		return IngressBridgeReport{}, err
+	}
+	observations, err := readIngressBridgeObservations(ctx, tx, normalized)
+	if err != nil {
+		return IngressBridgeReport{}, err
+	}
+	sessions, err := readIngressBridgeSessions(ctx, tx, normalized)
+	if err != nil {
+		return IngressBridgeReport{}, err
+	}
+	var contextRecords []edge.ObservationRecord
+	complete := true
+	if len(observations) > 0 || len(sessions) > 0 {
+		var latestStored time.Time
+		if len(observations) > 0 {
+			latestStored = observations[len(observations)-1].StoredAt
+		} else if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&latestStored); err != nil {
+			return IngressBridgeReport{}, err
+		}
+		rows, queryErr := tx.Query(ctx, observationSelect+`
+   WHERE o.facility_id = $1 AND ($2 = '' OR o.zone_id = $2)
+    AND o.stored_at <= $3
+    AND NOT (o.observed_at >= $4 AND o.observed_at <= $5 AND ($6 = '' OR o.node_id = $6))
+   ORDER BY o.stored_at, o.observed_at, o.event_id, o.observation_id
+   LIMIT $7`, normalized.FacilityID, normalized.ZoneID, latestStored, normalized.Since, normalized.Until, normalized.NodeID, IngressBridgeMaxContext+1)
+		if queryErr != nil {
+			return IngressBridgeReport{}, fmt.Errorf("read bridge replay context: %w", queryErr)
+		}
+		contextRecords, err = collectObservationRows(rows)
+		rows.Close()
+		if err != nil {
+			return IngressBridgeReport{}, err
+		}
+		if len(contextRecords) > IngressBridgeMaxContext {
+			contextRecords = nil
+			complete = false
+		}
+	}
+	report, err := buildIngressBridgeReport(ctx, normalized, observations, sessions, contextRecords, complete)
+	if err != nil {
+		return IngressBridgeReport{}, err
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return IngressBridgeReport{}, err
+	}
+	if len(payload) > IngressBridgeMaxBytes {
+		return IngressBridgeReport{}, fmt.Errorf("%w: response bytes", ErrIngressBridgeBudget)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IngressBridgeReport{}, err
+	}
+	return report, nil
+}
 
-	sessions, err := s.readAnalyticsSessions(ctx, AnalyticsFilter{
+func BuildIngressBridgeReport(filter IngressBridgeFilter, observations []edge.ObservationRecord, sessions []analyticsSessionRow) (IngressBridgeReport, error) {
+	return buildIngressBridgeReport(context.Background(), filter, observations, sessions, nil, true)
+}
+
+func buildIngressBridgeReport(ctx context.Context, filter IngressBridgeFilter, observations []edge.ObservationRecord, sessions []analyticsSessionRow, contextRecords []edge.ObservationRecord, contextComplete bool) (IngressBridgeReport, error) {
+	normalized, err := normalizeIngressBridgeFilter(filter)
+	if err != nil {
+		return IngressBridgeReport{}, err
+	}
+	if len(observations) > IngressBridgeMaxObservations || len(sessions) > normalized.SessionLimit || len(contextRecords) > IngressBridgeMaxContext {
+		return IngressBridgeReport{}, ErrIngressBridgeBudget
+	}
+
+	sessions = append([]analyticsSessionRow(nil), sessions...)
+	for i := range sessions {
+		session := &sessions[i]
+		// Current session rows may have closed after this historical window.
+		if session.ExitAt != nil && session.ExitAt.After(normalized.Until) {
+			session.State = "open"
+			session.ExitAt = nil
+			session.ExitEventID = ""
+			session.ExitNodeID = ""
+			session.DurationSeconds = nil
+		}
+	}
+	identityRefs := buildIdentityRefs(observations, sessions)
+	sessionIndex := buildSessionBridgeIndex(sessions)
+	projector := presence.NewProjector(presence.WithAbsentIdentityRetention(100*365*24*time.Hour), presence.WithMaxAbsentIdentities(IngressBridgeMaxContext+IngressBridgeMaxObservations))
+	reasonCounts := make(map[string]int)
+
+	report := IngressBridgeReport{
 		FacilityID:   normalized.FacilityID,
 		ZoneID:       normalized.ZoneID,
 		NodeID:       normalized.NodeID,
 		Since:        normalized.Since,
 		Until:        normalized.Until,
-		SessionLimit: normalized.SessionLimit,
-	})
-	if err != nil {
-		return IngressBridgeReport{}, err
-	}
-
-	return BuildIngressBridgeReport(normalized, observations, sessions)
-}
-
-func BuildIngressBridgeReport(filter IngressBridgeFilter, observations []edge.ObservationRecord, sessions []analyticsSessionRow) (IngressBridgeReport, error) {
-	normalized, err := normalizeIngressBridgeFilter(filter)
-	if err != nil {
-		return IngressBridgeReport{}, err
-	}
-
-	identityRefs := buildIdentityRefs(observations, sessions)
-	sessionIndex := buildSessionBridgeIndex(sessions)
-	projector := presence.NewProjector()
-	reasonCounts := make(map[string]int)
-
-	report := IngressBridgeReport{
-		FacilityID: normalized.FacilityID,
-		ZoneID:     normalized.ZoneID,
-		NodeID:     normalized.NodeID,
-		Since:      normalized.Since,
-		Until:      normalized.Until,
+		Completeness: IngressBridgeCompleteness{Observations: true, Sessions: true, ReplayContext: contextComplete, ReasonCodes: []string{}},
 		Contract: IngressBridgeContract{
+			Version:               IngressBridgeVersion,
+			ReplayOrder:           "stored_at,observed_at,event_id,observation_id",
+			IdentityScope:         "report_local",
 			Scope:                 "repo_local_runtime_proof",
 			SourceTruth:           "source pass/fail remains immutable observation truth",
 			AcceptedPresenceTruth: "policy accepted presence is separate from source pass/fail truth",
@@ -187,16 +279,53 @@ func BuildIngressBridgeReport(filter IngressBridgeFilter, observations []edge.Ob
 		},
 	}
 
-	replayOrder := append([]edge.ObservationRecord(nil), observations...)
+	if !contextComplete {
+		report.Completeness.ReasonCodes = []string{ReasonIncompleteReplay}
+	}
+	// Context participates in replay, never in report identity assignment or output.
+	replayOrder := append(append([]edge.ObservationRecord(nil), observations...), contextRecords...)
+	output := make(map[string]bool, len(observations))
+	for _, record := range observations {
+		output[record.Identity()] = true
+	}
 	sortIngressBridgeObservations(replayOrder)
 	report.Evidence = make([]IngressBridgeEvidence, 0, len(replayOrder))
-	for index, record := range replayOrder {
-		evidence, err := classifyIngressBridgeEvidence(index+1, normalized, record, identityRefs, sessionIndex, projector)
+	for _, record := range replayOrder {
+		if err := ctx.Err(); err != nil {
+			return IngressBridgeReport{}, err
+		}
+		if !output[record.Identity()] {
+			if projectableBridgeRecord(record, acceptedPresence(record)) && canProjectBridgeRecord(record) {
+				projection, err := projector.Apply(record.PresenceEvent())
+				if err != nil {
+					return IngressBridgeReport{}, err
+				}
+				if projection.Applied && record.Result == "pass" && !acceptedPresence(record) {
+					contextComplete = false
+				}
+			}
+			continue
+		}
+		evidence, err := classifyIngressBridgeEvidence(len(report.Evidence)+1, normalized, record, identityRefs, sessionIndex, projector)
 		if err != nil {
 			return IngressBridgeReport{}, err
 		}
+		if evidence.ProjectionApplied && record.Result == "pass" && !acceptedPresence(record) {
+			contextComplete = false
+		}
 		report.Evidence = append(report.Evidence, evidence)
-		accumulateEvidenceSummary(&report.Summary, evidence, reasonCounts)
+	}
+	report.Completeness.ReplayContext = contextComplete
+	if !contextComplete {
+		report.Completeness.ReasonCodes = []string{ReasonIncompleteReplay}
+	}
+	for i := range report.Evidence {
+		evidence := &report.Evidence[i]
+		if !contextComplete {
+			blockBridgeEligibility(&evidence.Eligibility)
+			evidence.ReasonCodes = appendReason(evidence.ReasonCodes, ReasonIncompleteReplay)
+		}
+		accumulateEvidenceSummary(&report.Summary, *evidence, reasonCounts)
 	}
 
 	sessionOrder := append([]analyticsSessionRow(nil), sessions...)
@@ -208,12 +337,17 @@ func BuildIngressBridgeReport(filter IngressBridgeFilter, observations []edge.Ob
 		}
 		return left.Before(right)
 	})
-	if normalized.SessionLimit > 0 && len(sessionOrder) > normalized.SessionLimit {
-		sessionOrder = sessionOrder[:normalized.SessionLimit]
-	}
 	report.Sessions = make([]IngressBridgeSession, 0, len(sessionOrder))
 	for _, session := range sessionOrder {
+		if err := ctx.Err(); err != nil {
+			return IngressBridgeReport{}, err
+		}
+
 		classified := classifyIngressBridgeSession(session, identityRefs)
+		if !contextComplete {
+			blockBridgeEligibility(&classified.Eligibility)
+			classified.ReasonCodes = appendReason(classified.ReasonCodes, ReasonIncompleteReplay)
+		}
 		report.Sessions = append(report.Sessions, classified)
 		accumulateSessionSummary(&report.Summary, classified, reasonCounts)
 	}
@@ -222,8 +356,8 @@ func BuildIngressBridgeReport(filter IngressBridgeFilter, observations []edge.Ob
 	return report, nil
 }
 
-func (s *PostgresStore) readIngressBridgeObservations(ctx context.Context, filter IngressBridgeFilter) ([]edge.ObservationRecord, error) {
-	rows, err := s.pool.Query(ctx, observationSelect+`
+func readIngressBridgeObservations(ctx context.Context, tx pgx.Tx, filter IngressBridgeFilter) ([]edge.ObservationRecord, error) {
+	rows, err := tx.Query(ctx, observationSelect+`
 		WHERE
 			o.facility_id = $1
 			AND ($2 = '' OR o.zone_id = $2)
@@ -231,13 +365,59 @@ func (s *PostgresStore) readIngressBridgeObservations(ctx context.Context, filte
 			AND o.observed_at >= $4
 			AND o.observed_at <= $5
 		ORDER BY o.stored_at ASC, o.observed_at ASC, o.event_id ASC, o.observation_id ASC
-	`, filter.FacilityID, filter.ZoneID, filter.NodeID, filter.Since, filter.Until)
+  LIMIT $6
+ `, filter.FacilityID, filter.ZoneID, filter.NodeID, filter.Since, filter.Until, IngressBridgeMaxObservations+1)
 	if err != nil {
 		return nil, fmt.Errorf("query edge ingress bridge observations: %w", err)
 	}
 	defer rows.Close()
 
-	return collectObservationRows(rows)
+	records, err := collectObservationRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) > IngressBridgeMaxObservations {
+		return nil, fmt.Errorf("%w: observations", ErrIngressBridgeBudget)
+	}
+	return records, nil
+}
+
+func readIngressBridgeSessions(ctx context.Context, tx pgx.Tx, filter IngressBridgeFilter) ([]analyticsSessionRow, error) {
+	rows, err := tx.Query(ctx, `
+ SELECT session_id::text, external_identity_hash, state, COALESCE(entry_event_id,''), COALESCE(entry_node_id,''), entry_at,
+ COALESCE(exit_event_id,''), COALESCE(exit_node_id,''), exit_at, duration_seconds
+ FROM athena.edge_sessions
+ WHERE facility_id = $1 AND ($2 = '' OR zone_id = $2)
+ AND ($3 = '' OR entry_node_id = $3 OR (exit_node_id = $3 AND exit_at <= $4))
+ AND ((entry_at IS NOT NULL AND entry_at <= $4 AND (exit_at IS NULL OR exit_at >= $5))
+ OR (entry_at IS NULL AND exit_at >= $5 AND exit_at <= $4))
+ ORDER BY COALESCE(exit_at, entry_at), session_id LIMIT $6`, filter.FacilityID, filter.ZoneID, filter.NodeID, filter.Until, filter.Since, filter.SessionLimit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sessions := make([]analyticsSessionRow, 0)
+	for rows.Next() {
+		var row analyticsSessionRow
+		if err := rows.Scan(&row.SessionID, &row.ExternalIdentityHash, &row.State, &row.EntryEventID, &row.EntryNodeID, &row.EntryAt, &row.ExitEventID, &row.ExitNodeID, &row.ExitAt, &row.DurationSeconds); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(sessions) > filter.SessionLimit {
+		return nil, fmt.Errorf("%w: sessions", ErrIngressBridgeBudget)
+	}
+	return sessions, nil
+}
+
+func blockBridgeEligibility(eligibility *IngressBridgeEligibility) {
+	for _, signal := range []*EligibilitySignal{&eligibility.CoPresenceProof, &eligibility.PrivateDailyPresence, &eligibility.ReliabilityVerification} {
+		signal.Eligible = false
+		signal.ReasonCodes = appendReason(signal.ReasonCodes, ReasonIncompleteReplay)
+	}
 }
 
 func normalizeIngressBridgeFilter(filter IngressBridgeFilter) (IngressBridgeFilter, error) {
@@ -262,8 +442,14 @@ func normalizeIngressBridgeFilter(filter IngressBridgeFilter) (IngressBridgeFilt
 	if normalized.Until.Before(normalized.Since) {
 		return IngressBridgeFilter{}, fmt.Errorf("until must be greater than or equal to since")
 	}
-	if normalized.SessionLimit < 0 {
-		return IngressBridgeFilter{}, fmt.Errorf("session_limit must be >= 0")
+	if normalized.Until.Sub(normalized.Since) > IngressBridgeMaxWindow {
+		return IngressBridgeFilter{}, fmt.Errorf("window exceeds 24 hours")
+	}
+	if normalized.SessionLimit == 0 {
+		normalized.SessionLimit = 50
+	}
+	if normalized.SessionLimit < 1 || normalized.SessionLimit > IngressBridgeMaxSessions {
+		return IngressBridgeFilter{}, fmt.Errorf("session_limit must be between 1 and 250")
 	}
 	return normalized, nil
 }

@@ -23,6 +23,27 @@ import (
 	"github.com/ixxet/athena/internal/server"
 )
 
+func TestEdgeIngressBridgeRejectsExcessBeforeOpeningStore(t *testing.T) {
+	previous := newIngressBridgeStore
+	newIngressBridgeStore = func(context.Context, string) (ingressBridgeStore, error) {
+		t.Fatal("invalid query opened database")
+		return nil, nil
+	}
+	defer func() { newIngressBridgeStore = previous }()
+	for _, args := range [][]string{
+		{"--session-limit", "0"}, {"--session-limit", "251"}, {"--format", "unsupported"}, {"--until", "2026-10-22T10:00:00Z"},
+	} {
+		cmd := newRootCmd()
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		base := []string{"edge", "ingress-bridge", "--facility", "ashtonbee", "--since", "2026-10-20T10:00:00Z", "--until", "2026-10-20T11:00:00Z"}
+		cmd.SetArgs(append(base, args...))
+		if err := cmd.Execute(); err == nil {
+			t.Fatalf("invalid args accepted: %v", args)
+		}
+	}
+}
+
 type serveStubPublisher struct{}
 
 func (serveStubPublisher) Publish(context.Context, string, []byte) error {
