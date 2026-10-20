@@ -1,5 +1,12 @@
 # athena Roadmap
 
+R1 (2026-10-20): the ingress bridge now has v2 safety metadata, bounded
+snapshot/context/session reads and historical replay checks. See the
+[implemented contract](runbooks/edge-ingress.md#r1-hardened-bridge-contract-2026-10-20)
+and the [booking-first readiness record](https://github.com/ixxet/ashton-platform/blob/main/planning/BOOKING-SCHEDULING-CLOSED-TEST-READINESS.md).
+Broader physical-truth expansion and optional bridge deployment follow the
+booking/scheduling priority; no R1 live changes are claimed.
+
 ## Objective
 
 Keep ATHENA moving through narrow physical-truth slices: read path first, then

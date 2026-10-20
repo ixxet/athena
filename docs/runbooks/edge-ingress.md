@@ -185,6 +185,82 @@ This HTTP read is repo/runtime auth proof only. It is not deployed exposure,
 does not change proxy/GitOps, and must not be exposed publicly without a
 separate deploy/live-smoke gate.
 
+## R1 hardened bridge contract (2026-10-20)
+
+The internal JSON contract is `athena_ingress_bridge_v2`. Both CLI and HTTP
+include `contract.version`, `identity_scope: report_local`,
+`replay_order: stored_at,observed_at,event_id,observation_id` and explicit
+`completeness.observations`, `.sessions`, `.replay_context`, `.reason_codes`.
+Existing explanatory fields remain. APOLLO rejects legacy unversioned files;
+regenerate them with this ATHENA source. Additive fields are compatible.
+
+| Budget | Enforcement |
+| --- | --- |
+| Report observations | 1,000; database LIMIT 1,001 detects overflow before eligibility |
+| Replay context | 4,000; LIMIT 4,001 detects overflow; report explicitly incomplete and every evidence/session signal blocked |
+| Source-pass sessions | Complete requested set, 1..250, default 50; limit plus one detects overflow, which is rejected rather than truncated; CLI 0 no longer means unlimited |
+| Window | At most 24 hours in direct store, CLI and HTTP; a smaller configured analytics window still applies at HTTP |
+| Encoded bytes | 2 MiB compact HTTP or indented CLI JSON, checked before writing output |
+| Work time | 5-second operation context, 4-second per-statement PostgreSQL timeout; caller cancellation reaches queries and reconstruction |
+
+The bridge uses a read-only repeatable-read snapshot and separate session
+queries, leaving aggregate analytics semantics unchanged. Replay includes all
+retained applicable facility/zone history in storage order through the final
+reported row, including other nodes and observations outside the observed-time
+window. It never seeds an old window from today's latest identity marker.
+Output still honours the requested node scope. Later session exits do not
+close an earlier window or pull a future exit node into historical scope.
+
+An uncommitted pass that would change reconstructed state is ambiguous: the
+publish could have failed or its durable commit could have failed. It marks
+replay incomplete and blocks all report eligibility. Repeated/stale events
+that do not change presence remain classified separately. No missing bounded
+history is interpreted as proof of absence. Report-local `identity-###` values
+are redacted references, unsuitable for durable member credits across reports.
+Policy-accepted source failures never become source-pass sessions.
+
+HTTP budget errors return 422; operation cancellation/deadline returns 504;
+internal failures are redacted. Existing 401/403/503 auth distinctions,
+constant-time token comparison, no-store headers and read-only behaviour remain.
+The APOLLO bridge client rejects all redirects without follow-up or token
+forwarding. Occupancy/analytics client redirect behaviour remains unchanged.
+
+Focused regression and representative scan/sort evidence:
+
+```sh
+go test -count=1 -v ./internal/edgehistory -run 'TestIngressBridge'
+go test -count=1 ./internal/server ./cmd/athena -run IngressBridge
+```
+
+The fixture EXPLAINs use representative projections/predicates, not exact full
+production joins. A 4,002-row history fixture scanned/sorted 4,002 rows to return
+4,001; LIMIT alone is not a physical-scan ceiling. Query deadlines and a blocked
+query cancellation regression provide the separate time bound. No index or
+migration was added under R1.
+
+The real cross-service rehearsal is in APOLLO's existing CLI test file:
+
+```sh
+cd ../apollo
+APOLLO_ATHENA_REHEARSAL=1 \
+ATHENA_SOURCE_DIR="$(cd ../athena && pwd)" \
+go test -count=1 -v ./cmd/apollo -run TestPresenceAthenaGateRealServicePostgres
+```
+
+This builds actual ATHENA into a temporary directory, applies both schemas to
+disposable PostgreSQL 16, starts disposable NATS, creates a synthetic admission
+policy and submits actual tap HTTP requests. APOLLO's actual client/classifier/
+CLI consumes nonempty HTTP evidence in JSON/text and regular-file modes. It
+proves pre-window/cross-node replay, policy/source separation, redaction and
+unchanged APOLLO visits/tap-links/streaks/booking/schedule counts. The opted-in
+run fails if required sibling source is missing; ordinary single-repo CI skips
+it explicitly and does not claim cross-service proof.
+
+Full results, commits, publication and booking-first deployment decisions live
+in the [canonical R1 record](https://github.com/ixxet/ashton-platform/blob/main/planning/BOOKING-SCHEDULING-CLOSED-TEST-READINESS.md).
+R1 changes source only; live ATHENA remains on the independently recorded
+`v0.8.2` digest. Booking rollout does not depend on optional bridge rollout.
+
 ## Browser Fixture
 
 Use these files before the facility reopens:
